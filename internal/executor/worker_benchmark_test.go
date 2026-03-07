@@ -10,8 +10,17 @@ import (
 
 	"ota-platform/internal/db"
 	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
 )
+
+type benchmarkKeyStore struct {
+	keys *keystore.CardKeyMaterial
+}
+
+func (s *benchmarkKeyStore) GetKeys(context.Context, string) (*keystore.CardKeyMaterial, error) {
+	return s.keys, nil
+}
 
 type benchmarkCoordinationStore struct {
 	cardKeys       *redispkg.CardKeys
@@ -90,13 +99,15 @@ func (benchmarkExecutionStore) CompleteCampaignIfRunning(context.Context, string
 }
 
 func BenchmarkHandleActivate(b *testing.B) {
-	store := &benchmarkCoordinationStore{
-		cardKeys: &redispkg.CardKeys{
+	ks := &benchmarkKeyStore{
+		keys: &keystore.CardKeyMaterial{
 			EncKey:    []byte{0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F},
 			AuthKey:   []byte{0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F},
 			ProfileID: "profile-1",
 			MSISDN:    "1234567890",
 		},
+	}
+	store := &benchmarkCoordinationStore{
 		commands: []redispkg.CampaignCommandCache{{
 			Sequence:       1,
 			ApplicationID:  "app-1",
@@ -126,7 +137,7 @@ func BenchmarkHandleActivate(b *testing.B) {
 		},
 	}
 
-	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, nil, nil, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, nil, zap.NewNop())
+	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, ks, nil, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, nil, zap.NewNop())
 	payload, err := json.Marshal(kafkapkg.CardEvent{
 		Type:       "card.activate",
 		EventID:    "evt-1",

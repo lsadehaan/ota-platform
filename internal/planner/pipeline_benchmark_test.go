@@ -14,10 +14,30 @@ import (
 	"ota-platform/internal/db"
 	"ota-platform/internal/executor"
 	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
 	"ota-platform/internal/smpp"
 	"ota-platform/internal/transport"
 )
+
+type pipelineKeyStore struct {
+	keys *keystore.CardKeyMaterial
+}
+
+func (s *pipelineKeyStore) GetKeys(context.Context, string) (*keystore.CardKeyMaterial, error) {
+	return s.keys, nil
+}
+
+func newPipelineKeyStore() *pipelineKeyStore {
+	return &pipelineKeyStore{
+		keys: &keystore.CardKeyMaterial{
+			EncKey:    []byte{0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F},
+			AuthKey:   []byte{0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F},
+			ProfileID: "profile-1",
+			MSISDN:    "1234567890",
+		},
+	}
+}
 
 type pipelineCoordinationStore struct {
 	cardKeys       *redispkg.CardKeys
@@ -290,7 +310,7 @@ func BenchmarkActivationPipeline(b *testing.B) {
 		smsProducer := &pipelineProducer{}
 		logProducer := &pipelineProducer{}
 		eventProducer := &pipelineProducer{}
-		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, nil, nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
+		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
 		plannerSvc := NewService(database, &executorBridgePublisher{worker: worker, ctx: context.Background()}, zap.NewNop())
 		projectorStore := &pipelineProjectorStore{}
 		gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, &pipelineProducer{}, coordination, zap.NewNop())
@@ -326,7 +346,7 @@ func BenchmarkActivationResponsePipeline(b *testing.B) {
 	smsProducer := &pipelineProducer{}
 	logProducer := &pipelineProducer{}
 	eventProducer := &pipelineProducer{}
-	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, nil, nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
+	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
 	bridge := &executorBridgePublisher{worker: worker, ctx: context.Background()}
 	gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, bridge, coordination, zap.NewNop())
 

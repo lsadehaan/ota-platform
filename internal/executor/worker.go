@@ -117,24 +117,10 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 		return nil
 	}
 
-	// 2. Load card keys from Redis (or DB on miss).
-	cardKeys, err := w.redis.GetCardKeys(ctx, event.CardID)
+	// 2. Load card keys via keystore.
+	cardKeys, err := w.keyStore.GetKeys(ctx, event.CardID)
 	if err != nil {
-		return fmt.Errorf("get card keys from redis: %w", err)
-	}
-	if cardKeys == nil {
-		var card db.Card
-		if err := w.db.WithContext(ctx).First(&card, "id = ?", event.CardID).Error; err != nil {
-			return fmt.Errorf("load card from db: %w", err)
-		}
-		cardKeys = &redispkg.CardKeys{
-			EncKey:    card.EncKey,
-			AuthKey:   card.AuthKey,
-			KEK:       card.KEK,
-			ProfileID: card.ProfileID.String(),
-			MSISDN:    card.MSISDN,
-		}
-		_ = w.redis.CacheCardKeys(ctx, event.CardID, cardKeys)
+		return fmt.Errorf("get card keys: %w", err)
 	}
 
 	// 3. Load campaign commands from Redis (or DB on miss).
@@ -175,11 +161,17 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 	counter[0] = byte(counterVal >> 32)
 
 	input := &gsm0348.CommandPacketInput{
-		TAR:          tar,
-		Counter:      counter,
-		CipheringKey: cardKeys.EncKey,
-		SigningKey:   cardKeys.AuthKey,
-		UserData:     cmd.Script,
+		TAR:      tar,
+		Counter:  counter,
+		UserData: cmd.Script,
+	}
+
+	if w.cryptoProvider != nil {
+		input.CryptoProvider = w.cryptoProvider
+		input.CardID = event.CardID
+	} else {
+		input.CipheringKey = cardKeys.EncKey
+		input.SigningKey = cardKeys.AuthKey
 	}
 
 	packet, err := secProfile.BuildCommandPacket(input)
@@ -588,24 +580,10 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 		event.CampaignID = state.CampaignID
 	}
 
-	// 2. Load card keys from Redis for decryption.
-	cardKeys, err := w.redis.GetCardKeys(ctx, event.CardID)
+	// 2. Load card keys via keystore.
+	cardKeys, err := w.keyStore.GetKeys(ctx, event.CardID)
 	if err != nil {
 		return fmt.Errorf("get card keys: %w", err)
-	}
-	if cardKeys == nil {
-		var card db.Card
-		if err := w.db.WithContext(ctx).First(&card, "id = ?", event.CardID).Error; err != nil {
-			return fmt.Errorf("load card from db: %w", err)
-		}
-		cardKeys = &redispkg.CardKeys{
-			EncKey:    card.EncKey,
-			AuthKey:   card.AuthKey,
-			KEK:       card.KEK,
-			ProfileID: card.ProfileID.String(),
-			MSISDN:    card.MSISDN,
-		}
-		_ = w.redis.CacheCardKeys(ctx, event.CardID, cardKeys)
 	}
 
 	// 3. Parse the MO payload.
