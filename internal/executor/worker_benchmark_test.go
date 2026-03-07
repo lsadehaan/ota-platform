@@ -23,7 +23,6 @@ func (s *benchmarkKeyStore) GetKeys(context.Context, string) (*keystore.CardKeyM
 }
 
 type benchmarkCoordinationStore struct {
-	cardKeys       *redispkg.CardKeys
 	commands       []redispkg.CampaignCommandCache
 	campaignParams *redispkg.CampaignParams
 	profile        db.Profile
@@ -36,12 +35,6 @@ func (s *benchmarkCoordinationStore) GetCampaignStatus(context.Context, string) 
 	return "running", nil
 }
 func (s *benchmarkCoordinationStore) SetCampaignStatus(context.Context, string, string) error {
-	return nil
-}
-func (s *benchmarkCoordinationStore) GetCardKeys(context.Context, string) (*redispkg.CardKeys, error) {
-	return s.cardKeys, nil
-}
-func (s *benchmarkCoordinationStore) CacheCardKeys(context.Context, string, *redispkg.CardKeys) error {
 	return nil
 }
 func (s *benchmarkCoordinationStore) IncrCounter(context.Context, string, string) (int64, error) {

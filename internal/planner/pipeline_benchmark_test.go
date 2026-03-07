@@ -40,7 +40,6 @@ func newPipelineKeyStore() *pipelineKeyStore {
 }
 
 type pipelineCoordinationStore struct {
-	cardKeys       *redispkg.CardKeys
 	commands       []redispkg.CampaignCommandCache
 	campaignParams *redispkg.CampaignParams
 	profile        db.Profile
@@ -52,12 +51,6 @@ type pipelineCoordinationStore struct {
 
 func newPipelineCoordinationStore() *pipelineCoordinationStore {
 	return &pipelineCoordinationStore{
-		cardKeys: &redispkg.CardKeys{
-			EncKey:    []byte{0x40, 0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4A, 0x4B, 0x4C, 0x4D, 0x4E, 0x4F},
-			AuthKey:   []byte{0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57, 0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F},
-			ProfileID: "profile-1",
-			MSISDN:    "1234567890",
-		},
 		commands: []redispkg.CampaignCommandCache{{
 			Sequence:       1,
 			ApplicationID:  "app-1",
@@ -98,12 +91,6 @@ func (s *pipelineCoordinationStore) GetCampaignStatus(context.Context, string) (
 	return "running", nil
 }
 func (s *pipelineCoordinationStore) SetCampaignStatus(context.Context, string, string) error {
-	return nil
-}
-func (s *pipelineCoordinationStore) GetCardKeys(context.Context, string) (*redispkg.CardKeys, error) {
-	return s.cardKeys, nil
-}
-func (s *pipelineCoordinationStore) CacheCardKeys(context.Context, string, *redispkg.CardKeys) error {
 	return nil
 }
 func (s *pipelineCoordinationStore) IncrCounter(_ context.Context, cardID, appID string) (int64, error) {
@@ -402,7 +389,7 @@ func BenchmarkActivationResponsePipeline(b *testing.B) {
 		gateway.HandleDLRReceipt(context.Background(), "", []byte(
 			fmt.Sprintf(dlrTemplate, smppID),
 		))
-		gateway.HandleMOPayload(context.Background(), coordination.cardKeys.MSISDN, "", porPayload)
+		gateway.HandleMOPayload(context.Background(), "1234567890", "", porPayload)
 
 		state, err := coordination.GetCardState(context.Background(), "card-1")
 		if err != nil {

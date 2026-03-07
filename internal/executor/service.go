@@ -14,8 +14,6 @@ type CoordinationStore interface {
 	CheckAndSetDedupe(ctx context.Context, eventID string) (bool, error)
 	GetCampaignStatus(ctx context.Context, campaignID string) (string, error)
 	SetCampaignStatus(ctx context.Context, campaignID, status string) error
-	GetCardKeys(ctx context.Context, cardID string) (*redispkg.CardKeys, error)
-	CacheCardKeys(ctx context.Context, cardID string, keys *redispkg.CardKeys) error
 	IncrCounter(ctx context.Context, cardID, appID string) (int64, error)
 	AcquireThrottle(ctx context.Context, campaignID string, ratePerSec int) (bool, error)
 	SetCardState(ctx context.Context, cardID string, state *redispkg.CardState) error
