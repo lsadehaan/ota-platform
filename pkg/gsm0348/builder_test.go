@@ -1,6 +1,7 @@
 package gsm0348
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -428,4 +429,93 @@ func TestKIcKIDEncoding(t *testing.T) {
 	if kid != 0x25 {
 		t.Errorf("KID = 0x%02X, want 0x25", kid)
 	}
+}
+
+// TestBuildCommandPacket_WithCryptoProvider tests that the builder delegates
+// MAC and encryption to a CryptoProvider when one is provided.
+func TestBuildCommandPacket_WithCryptoProvider(t *testing.T) {
+	sp := &SecurityProfile{
+		CertMode:    CertCC,
+		Ciphered:    true,
+		CounterMode: CounterReplayCheck,
+		PoRMode:     PoRAlways,
+		PoRCertMode: CertCC,
+		PoRCiphered: false,
+		PoRProtocol: 0x01,
+		KIcAlgo:     0x01,
+		KIcMode:     Cipher3DES_CBC_2Keys,
+		KIcKeysetID: 0x01,
+		KIDAlgo:     0x01,
+		KIDMode:     Cipher3DES_CBC_2Keys,
+		KIDKeysetID: 0x01,
+	}
+
+	cipherKey := make([]byte, 16)
+	signingKey := make([]byte, 16)
+	for i := range cipherKey {
+		cipherKey[i] = byte(i + 0x10)
+		signingKey[i] = byte(i + 0x20)
+	}
+
+	// Build with raw keys (baseline).
+	inputRaw := &CommandPacketInput{
+		TAR:          [3]byte{0xB0, 0x00, 0x10},
+		Counter:      [5]byte{0x00, 0x00, 0x00, 0x00, 0x05},
+		CipheringKey: cipherKey,
+		SigningKey:   signingKey,
+		UserData:     []byte{0xA0, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00},
+	}
+
+	resultRaw, err := sp.BuildCommandPacket(inputRaw)
+	if err != nil {
+		t.Fatalf("raw BuildCommandPacket failed: %v", err)
+	}
+
+	// Build with CryptoProvider that uses the same keys internally.
+	provider := &testCryptoProvider{cipherKey: cipherKey, signingKey: signingKey}
+	inputCP := &CommandPacketInput{
+		TAR:            [3]byte{0xB0, 0x00, 0x10},
+		Counter:        [5]byte{0x00, 0x00, 0x00, 0x00, 0x05},
+		CryptoProvider: provider,
+		CardID:         "test-card-id",
+		UserData:       []byte{0xA0, 0xA4, 0x00, 0x00, 0x02, 0x3F, 0x00},
+	}
+
+	resultCP, err := sp.BuildCommandPacket(inputCP)
+	if err != nil {
+		t.Fatalf("CryptoProvider BuildCommandPacket failed: %v", err)
+	}
+
+	// Both should produce identical output.
+	if hex.EncodeToString(resultRaw) != hex.EncodeToString(resultCP) {
+		t.Errorf("CryptoProvider result differs from raw key result\n  raw: %s\n  cp:  %s",
+			hex.EncodeToString(resultRaw), hex.EncodeToString(resultCP))
+	}
+
+	if !provider.macCalled {
+		t.Error("CryptoProvider.ComputeMAC was not called")
+	}
+	if !provider.encryptCalled {
+		t.Error("CryptoProvider.Encrypt was not called")
+	}
+}
+
+// testCryptoProvider delegates to the existing software crypto using the provided keys.
+type testCryptoProvider struct {
+	cipherKey     []byte
+	signingKey    []byte
+	macCalled     bool
+	encryptCalled bool
+}
+
+func (p *testCryptoProvider) ComputeMAC(ctx context.Context, cardID string, algo, mode string, data []byte) ([]byte, error) {
+	p.macCalled = true
+	cipherMode := mapCipherMode(mode)
+	return computeMAC(cipherMode, p.signingKey, nil, data)
+}
+
+func (p *testCryptoProvider) Encrypt(ctx context.Context, cardID string, algo, mode string, data []byte) ([]byte, error) {
+	p.encryptCalled = true
+	cipherMode := mapCipherMode(mode)
+	return encryptData(cipherMode, p.cipherKey, nil, data)
 }

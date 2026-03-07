@@ -1,6 +1,7 @@
 package gsm0348
 
 import (
+	"context"
 	"crypto/cipher"
 	"crypto/des"
 	"fmt"
@@ -51,7 +52,18 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 		copy(signature, crc)
 	case CertCC:
 		// Cryptographic Checksum (MAC)
-		mac, err := computeMAC(sp.KIDMode, input.SigningKey, header, paddedData)
+		var mac []byte
+		var err error
+		if input.CryptoProvider != nil {
+			macInput := append(header, paddedData...)
+			if len(macInput)%8 != 0 {
+				padLen := 8 - (len(macInput) % 8)
+				macInput = append(macInput, make([]byte, padLen)...)
+			}
+			mac, err = input.CryptoProvider.ComputeMAC(context.Background(), input.CardID, algoName(sp.KIDAlgo), cipherModeName(sp.KIDMode), macInput)
+		} else {
+			mac, err = computeMAC(sp.KIDMode, input.SigningKey, header, paddedData)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("gsm0348: compute MAC: %w", err)
 		}
@@ -65,7 +77,13 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 
 	// Encrypt the secured data if ciphering is enabled.
 	if sp.Ciphered {
-		encrypted, err := encryptData(sp.KIcMode, input.CipheringKey, input.Counter[:], securedData)
+		var encrypted []byte
+		var err error
+		if input.CryptoProvider != nil {
+			encrypted, err = input.CryptoProvider.Encrypt(context.Background(), input.CardID, algoName(sp.KIcAlgo), cipherModeName(sp.KIcMode), securedData)
+		} else {
+			encrypted, err = encryptData(sp.KIcMode, input.CipheringKey, input.Counter[:], securedData)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("gsm0348: encrypt data: %w", err)
 		}
@@ -362,5 +380,31 @@ func computeCRC(header, data []byte, length int) []byte {
 func xorBytes(dst, src []byte) {
 	for i := 0; i < len(dst) && i < len(src); i++ {
 		dst[i] ^= src[i]
+	}
+}
+
+// algoName returns a string name for the algorithm byte.
+func algoName(algo byte) string {
+	switch algo {
+	case 0x02:
+		return "AES"
+	default:
+		return "DES"
+	}
+}
+
+// cipherModeName returns a string name for a CipherMode.
+func cipherModeName(mode CipherMode) string {
+	switch mode {
+	case CipherDES_CBC:
+		return "DES_CBC"
+	case Cipher3DES_CBC_2Keys:
+		return "TRIPLE_DES_CBC_2_KEYS"
+	case Cipher3DES_CBC_3Keys:
+		return "TRIPLE_DES_CBC_3_KEYS"
+	case CipherAES_CBC:
+		return "AES_CBC"
+	default:
+		return "DES_CBC"
 	}
 }
