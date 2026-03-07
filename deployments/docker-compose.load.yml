@@ -1,0 +1,14 @@
+services:
+  kafka-init:
+    environment:
+      KAFKA_TOPIC_PARTITIONS: "48"
+
+  card-executor:
+    environment:
+      CARD_WORKER_CONCURRENCY: "8"
+
+  sms-gateway:
+    environment:
+      SMS_SENDER_WORKERS: "32"
+      SMPP_CONNECTIONS: "8"
+      SMPP_WINDOW_SIZE: "20"

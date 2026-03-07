@@ -1,0 +1,187 @@
+syntax = "proto3";
+
+package ota.events.v1;
+
+option go_package = "ota-platform/internal/contracts/proto/ota/events/v1;eventsv1";
+
+import "ota/common/v1/common.proto";
+
+message SMSPart {
+  uint32 sequence = 1;
+  uint32 total = 2;
+  uint32 ref_num = 3;
+  string payload_hex = 4;
+}
+
+message CardActivatePayload {
+  uint32 step = 1;
+  uint32 retry_count = 2;
+  string activation_reason = 3;
+}
+
+message CardDLRReceivedPayload {
+  string msg_id = 1;
+  string smpp_message_id = 2;
+  string dlr_status = 3;
+  string error_code = 4;
+  bool is_final = 5;
+}
+
+message CardMOReceivedPayload {
+  string source_msisdn = 1;
+  string payload_hex = 2;
+  string correlation_source = 3;
+}
+
+message CardFailedPayload {
+  uint32 step = 1;
+  uint32 retry_count = 2;
+  string failure_code = 3;
+  string failure_reason = 4;
+}
+
+message CardRetryRequestedPayload {
+  uint32 step = 1;
+  uint32 retry_count = 2;
+  string reason = 3;
+}
+
+message CardCompletedPayload {
+  uint32 final_step = 1;
+  string completed_at = 2;
+}
+
+message SMSSubmitRequestedPayload {
+  string msg_id = 1;
+  string msisdn = 2;
+  uint32 ton = 3;
+  uint32 npi = 4;
+  uint32 data_coding = 5;
+  uint32 protocol_id = 6;
+  uint32 esm_class = 7;
+  repeated SMSPart parts = 8;
+}
+
+message TransportDLRFinalizedPayload {
+  string msg_id = 1;
+  string smpp_message_id = 2;
+  string dlr_status = 3;
+  string error_code = 4;
+  string logical_status = 5;
+}
+
+message TransportSubmitAcceptedPayload {
+  string msg_id = 1;
+  string smpp_message_id = 2;
+  uint32 part_sequence = 3;
+  uint32 part_total = 4;
+}
+
+message TransportSubmitFailedPayload {
+  string msg_id = 1;
+  string failure_code = 2;
+  string failure_reason = 3;
+  uint32 part_sequence = 4;
+  uint32 part_total = 5;
+}
+
+message TransportMOReceivedPayload {
+  string source_msisdn = 1;
+  string dest_msisdn = 2;
+  string payload_hex = 3;
+  string resolved_card_id = 4;
+  string correlation_confidence = 5;
+}
+
+message ExecutionCardStateChangedPayload {
+  string previous_status = 1;
+  string new_status = 2;
+  uint32 step = 3;
+  uint32 retry_count = 4;
+  uint64 snapshot_version = 5;
+}
+
+message ExecutionCounterAllocatedPayload {
+  string application_id = 1;
+  uint64 counter_value = 2;
+  string counter_hex = 3;
+}
+
+message MessageMTCreatedPayload {
+  string msg_id = 1;
+  string direction = 2;
+  string status = 3;
+  string raw_payload_b64 = 4;
+  string secured_payload_b64 = 5;
+  string counter_hex = 6;
+}
+
+message CardActivateEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  CardActivatePayload payload = 2;
+}
+
+message CardDLRReceivedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  CardDLRReceivedPayload payload = 2;
+}
+
+message CardMOReceivedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  CardMOReceivedPayload payload = 2;
+}
+
+message CardFailedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  CardFailedPayload payload = 2;
+}
+
+message CardRetryRequestedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  CardRetryRequestedPayload payload = 2;
+}
+
+message CardCompletedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  CardCompletedPayload payload = 2;
+}
+
+message SMSSubmitRequestedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  SMSSubmitRequestedPayload payload = 2;
+}
+
+message TransportDLRFinalizedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  TransportDLRFinalizedPayload payload = 2;
+}
+
+message TransportSubmitAcceptedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  TransportSubmitAcceptedPayload payload = 2;
+}
+
+message TransportSubmitFailedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  TransportSubmitFailedPayload payload = 2;
+}
+
+message TransportMOReceivedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  TransportMOReceivedPayload payload = 2;
+}
+
+message ExecutionCardStateChangedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  ExecutionCardStateChangedPayload payload = 2;
+}
+
+message ExecutionCounterAllocatedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  ExecutionCounterAllocatedPayload payload = 2;
+}
+
+message MessageMTCreatedEvent {
+  ota.common.v1.EventEnvelope meta = 1;
+  MessageMTCreatedPayload payload = 2;
+}

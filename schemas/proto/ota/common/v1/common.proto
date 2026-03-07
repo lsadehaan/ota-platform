@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package ota.common.v1;
+
+option go_package = "ota-platform/internal/contracts/proto/ota/common/v1;commonv1";
+
+message EventEnvelope {
+  string event_id = 1;
+  string event_type = 2;
+  uint32 schema_version = 3;
+  string occurred_at = 4;
+  string trace_id = 5;
+  string producer = 6;
+  string tenant_id = 7;
+  string campaign_run_id = 8;
+  string campaign_definition_id = 9;
+  string shard_id = 10;
+  string card_id = 11;
+}

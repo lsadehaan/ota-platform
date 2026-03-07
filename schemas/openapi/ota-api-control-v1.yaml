@@ -1,0 +1,932 @@
+openapi: 3.1.0
+info:
+  title: OTA Platform Control Plane API
+  version: 1.0.0
+  description: Control-plane CRUD and campaign-run orchestration API.
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/profiles:
+    get:
+      summary: List profiles
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileListResponse'
+    post:
+      summary: Create profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+  /api/v1/profiles/{profile_id}:
+    parameters:
+      - $ref: '#/components/parameters/ProfileID'
+    get:
+      summary: Get profile
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+    put:
+      summary: Update profile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProfileUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProfileResponse'
+    delete:
+      summary: Delete profile
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/cards:
+    get:
+      summary: List cards
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: q
+          in: query
+          schema:
+            type: string
+        - name: profile_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardListResponse'
+    post:
+      summary: Create card
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardResponse'
+  /api/v1/cards/{card_id}:
+    parameters:
+      - $ref: '#/components/parameters/CardID'
+    get:
+      summary: Get card control-plane record
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardResponse'
+    put:
+      summary: Update card
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardResponse'
+    delete:
+      summary: Delete card
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/card-groups:
+    get:
+      summary: List card groups
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardGroupListResponse'
+    post:
+      summary: Create card group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardGroupCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardGroupResponse'
+  /api/v1/card-groups/{group_id}:
+    parameters:
+      - $ref: '#/components/parameters/GroupID'
+    get:
+      summary: Get card group
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardGroupResponse'
+    put:
+      summary: Update card group
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardGroupUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardGroupResponse'
+    delete:
+      summary: Delete card group
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/card-groups/{group_id}/members:
+    parameters:
+      - $ref: '#/components/parameters/GroupID'
+    post:
+      summary: Add card group members
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardGroupMembersRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+    delete:
+      summary: Remove card group members
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CardGroupMembersRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/scripts:
+    get:
+      summary: List scripts
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptListResponse'
+    post:
+      summary: Create script
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptResponse'
+  /api/v1/scripts/{script_id}:
+    parameters:
+      - $ref: '#/components/parameters/ScriptID'
+    get:
+      summary: Get script
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptResponse'
+    put:
+      summary: Update script
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScriptUpdateRequest'
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ScriptResponse'
+    delete:
+      summary: Delete script
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/caps:
+    get:
+      summary: List CAP files
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CAPFileListResponse'
+  /api/v1/caps/upload:
+    post:
+      summary: Upload CAP file
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+              required: [file]
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CAPFileResponse'
+  /api/v1/caps/{cap_id}:
+    parameters:
+      - $ref: '#/components/parameters/CAPID'
+    get:
+      summary: Get CAP file metadata
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CAPFileResponse'
+    delete:
+      summary: Delete CAP file
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/caps/{cap_id}/apdu-preview:
+    parameters:
+      - $ref: '#/components/parameters/CAPID'
+    get:
+      summary: Preview APDUs generated from CAP
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CAPPreviewResponse'
+  /api/v1/campaign-definitions:
+    get:
+      summary: List campaign definitions
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignDefinitionListResponse'
+    post:
+      summary: Create campaign definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CampaignDefinitionCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignDefinitionResponse'
+  /api/v1/campaign-runs:
+    get:
+      summary: List campaign runs
+      parameters:
+        - $ref: '#/components/parameters/Page'
+        - $ref: '#/components/parameters/PageSize'
+        - name: status
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignRunListResponse'
+    post:
+      summary: Create campaign run
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CampaignRunCreateRequest'
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignRunResponse'
+  /api/v1/campaign-runs/{run_id}:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    get:
+      summary: Get campaign run metadata
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignRunResponse'
+  /api/v1/campaign-runs/{run_id}/resume:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    post:
+      summary: Resume campaign run
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/campaign-runs/{run_id}/abort:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    post:
+      summary: Abort campaign run
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+  /api/v1/campaign-runs/{run_id}/retry-failed:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    post:
+      summary: Create a new campaign run targeting only failed cards from the source run
+      responses:
+        '202':
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MessageResponse'
+components:
+  parameters:
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+    ProfileID:
+      name: profile_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CardID:
+      name: card_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunID:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    GroupID:
+      name: group_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ScriptID:
+      name: script_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CAPID:
+      name: cap_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  schemas:
+    MessageResponse:
+      type: object
+      properties:
+        message:
+          type: string
+      required: [message]
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_pages:
+          type: integer
+      required: [total, page, page_size, total_pages]
+    Profile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        max_concat_sms:
+          type: integer
+        buffer_size:
+          type: integer
+        pid:
+          type: integer
+        dcs:
+          type: integer
+        security_bytes_type:
+          type: string
+      required: [id, name, max_concat_sms, buffer_size, pid, dcs, security_bytes_type]
+    ProfileCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        max_concat_sms:
+          type: integer
+        buffer_size:
+          type: integer
+        pid:
+          type: integer
+        dcs:
+          type: integer
+        security_bytes_type:
+          type: string
+      required: [name]
+    ProfileUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        max_concat_sms:
+          type: integer
+        buffer_size:
+          type: integer
+        pid:
+          type: integer
+        dcs:
+          type: integer
+        security_bytes_type:
+          type: string
+    ProfileResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Profile'
+      required: [data]
+    ProfileListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Profile'
+          required: [data]
+    Card:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        iccid:
+          type: string
+        imsi:
+          type: string
+        msisdn:
+          type: string
+        profile_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+      required: [id, iccid, imsi, msisdn, profile_id, status]
+    CardCreateRequest:
+      type: object
+      properties:
+        iccid:
+          type: string
+        imsi:
+          type: string
+        msisdn:
+          type: string
+        profile_id:
+          type: string
+          format: uuid
+        enc_key:
+          type: string
+        auth_key:
+          type: string
+        kek:
+          type: string
+        status:
+          type: string
+      required: [iccid, imsi, msisdn, profile_id, enc_key, auth_key]
+    CardUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        iccid:
+          type: string
+        imsi:
+          type: string
+        msisdn:
+          type: string
+        profile_id:
+          type: string
+          format: uuid
+        enc_key:
+          type: string
+        auth_key:
+          type: string
+        kek:
+          type: string
+        status:
+          type: string
+    CardResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Card'
+      required: [data]
+    CardListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Card'
+          required: [data]
+    CardGroup:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+      required: [id, name]
+    CardGroupCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+      required: [name]
+    CardGroupUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+    CardGroupMembersRequest:
+      type: object
+      properties:
+        card_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+      required: [card_ids]
+    CardGroupResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CardGroup'
+      required: [data]
+    CardGroupListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/CardGroup'
+          required: [data]
+    Script:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        content:
+          type: string
+      required: [id, name, content]
+    ScriptCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        content:
+          type: string
+      required: [name, content]
+    ScriptUpdateRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+        content:
+          type: string
+    ScriptResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/Script'
+      required: [data]
+    ScriptListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/Script'
+          required: [data]
+    CAPFile:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        file_name:
+          type: string
+        package_aid:
+          type: string
+          nullable: true
+      required: [id, file_name]
+    CAPFileResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CAPFile'
+      required: [data]
+    CAPFileListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/CAPFile'
+          required: [data]
+    CAPPreviewResponse:
+      type: object
+      properties:
+        data:
+          type: object
+          properties:
+            apdus:
+              type: array
+              items:
+                type: string
+          required: [apdus]
+      required: [data]
+    CampaignDefinition:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        campaign_type:
+          type: string
+      required: [id, name, campaign_type]
+    CampaignDefinitionCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        campaign_type:
+          type: string
+        steps:
+          type: array
+          items:
+            type: object
+            properties:
+              sequence:
+                type: integer
+              application_id:
+                type: string
+                format: uuid
+              step_kind:
+                type: string
+              script_template:
+                type: object
+                additionalProperties: true
+              compiled_command_hex:
+                type: string
+                nullable: true
+              expect_response:
+                type: boolean
+            required: [sequence, application_id, step_kind, script_template]
+      required: [name, campaign_type, steps]
+    CampaignDefinitionResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CampaignDefinition'
+      required: [data]
+    CampaignDefinitionListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/CampaignDefinition'
+      required: [data]
+    CampaignRun:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        campaign_definition_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        target_count:
+          type: integer
+          nullable: true
+      required: [id, campaign_definition_id, status]
+    CampaignRunCreateRequest:
+      type: object
+      properties:
+        campaign_definition_id:
+          type: string
+          format: uuid
+        selection_spec:
+          type: object
+          additionalProperties: true
+        scheduled_at:
+          type: string
+          format: date-time
+          nullable: true
+        max_retries:
+          type: integer
+        throttle_sms_per_sec:
+          type: integer
+          nullable: true
+        max_concat_override:
+          type: integer
+          nullable: true
+      required: [campaign_definition_id, selection_spec]
+    CampaignRunResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CampaignRun'
+      required: [data]
+    CampaignRunListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/CampaignRun'
+          required: [data]

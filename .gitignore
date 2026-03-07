@@ -1,0 +1,39 @@
+# Go
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test
+*.test
+*.out
+coverage.txt
+
+# IDE / Tools
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.local
+
+# Node
+web/node_modules/
+web/.next/
+web/out/
+
+# Docker
+.docker/
+
+# Temp
+tmp/

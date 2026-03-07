@@ -1,0 +1,320 @@
+openapi: 3.1.0
+info:
+  title: OTA Platform Read Model API
+  version: 1.0.0
+  description: Read-model-backed operator query API for dashboard, campaign detail, and card execution views.
+servers:
+  - url: http://localhost:8080
+paths:
+  /api/v1/dashboard/kpis:
+    get:
+      summary: Get dashboard KPIs
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardKPIResponse'
+  /api/v1/dashboard/activity:
+    get:
+      summary: Get recent activity
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityListResponse'
+  /api/v1/campaign-runs/{run_id}/summary:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+    get:
+      summary: Get campaign run summary
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignSummaryResponse'
+  /api/v1/campaign-runs/{run_id}/cards:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+      - name: status
+        in: query
+        schema:
+          type: string
+    get:
+      summary: Get campaign cards page
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignCardListResponse'
+  /api/v1/campaign-runs/{run_id}/failed-cards:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+    get:
+      summary: Get failed cards for a run
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CampaignCardListResponse'
+  /api/v1/campaign-runs/{run_id}/activity:
+    parameters:
+      - $ref: '#/components/parameters/RunID'
+      - $ref: '#/components/parameters/Page'
+      - $ref: '#/components/parameters/PageSize'
+    get:
+      summary: Get campaign recent activity
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivityListResponse'
+  /api/v1/cards/{card_id}/execution:
+    parameters:
+      - $ref: '#/components/parameters/CardID'
+    get:
+      summary: Get card execution summary and recent messages
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CardExecutionResponse'
+components:
+  parameters:
+    RunID:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    CardID:
+      name: card_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    Page:
+      name: page
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+    PageSize:
+      name: page_size
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 1000
+  schemas:
+    Pagination:
+      type: object
+      properties:
+        total:
+          type: integer
+        page:
+          type: integer
+        page_size:
+          type: integer
+        total_pages:
+          type: integer
+      required: [total, page, page_size, total_pages]
+    DashboardKPI:
+      type: object
+      properties:
+        total_cards:
+          type: integer
+        active_campaigns:
+          type: integer
+        total_messages:
+          type: integer
+        messages_today:
+          type: integer
+        success_rate:
+          type: number
+        campaigns_by_status:
+          type: object
+          additionalProperties:
+            type: integer
+      required: [total_cards, active_campaigns, total_messages, messages_today, success_rate, campaigns_by_status]
+    DashboardKPIResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/DashboardKPI'
+      required: [data]
+    ActivityEntry:
+      type: object
+      properties:
+        campaign_run_id:
+          type: string
+          format: uuid
+          nullable: true
+        card_id:
+          type: string
+          format: uuid
+        msg_id:
+          type: string
+          format: uuid
+          nullable: true
+        event_type:
+          type: string
+        status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+      required: [card_id, event_type, status, created_at]
+    ActivityListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/ActivityEntry'
+          required: [data]
+    CampaignSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        total_cards:
+          type: integer
+        pending:
+          type: integer
+        in_progress:
+          type: integer
+        completed:
+          type: integer
+        failed:
+          type: integer
+        skipped:
+          type: integer
+      required: [id, status, total_cards, pending, in_progress, completed, failed, skipped]
+    CampaignSummaryResponse:
+      type: object
+      properties:
+        data:
+          $ref: '#/components/schemas/CampaignSummary'
+      required: [data]
+    CampaignCard:
+      type: object
+      properties:
+        card_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+        current_step:
+          type: integer
+        retry_count:
+          type: integer
+        last_msg_id:
+          type: string
+          format: uuid
+          nullable: true
+        last_error:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+      required: [card_id, status, current_step, retry_count, updated_at]
+    CampaignCardListResponse:
+      allOf:
+        - $ref: '#/components/schemas/Pagination'
+        - type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/CampaignCard'
+          required: [data]
+    CardExecution:
+      type: object
+      properties:
+        campaign_run_id:
+          type: string
+          format: uuid
+          nullable: true
+        status:
+          type: string
+        current_step:
+          type: integer
+        retry_count:
+          type: integer
+        last_msg_id:
+          type: string
+          format: uuid
+          nullable: true
+        counter_value:
+          type: integer
+        updated_at:
+          type: string
+          format: date-time
+      required: [status, current_step, retry_count, counter_value, updated_at]
+    CardMessage:
+      type: object
+      properties:
+        msg_id:
+          type: string
+          format: uuid
+        direction:
+          type: string
+        event_type:
+          type: string
+        status:
+          type: string
+        smpp_message_id:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required: [msg_id, direction, event_type, status, created_at]
+    CardExecutionResponse:
+      type: object
+      properties:
+        execution:
+          $ref: '#/components/schemas/CardExecution'
+        recent_messages:
+          type: object
+          properties:
+            data:
+              type: array
+              items:
+                $ref: '#/components/schemas/CardMessage'
+          required: [data]
+      required: [execution, recent_messages]
