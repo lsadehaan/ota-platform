@@ -2,16 +2,31 @@ package transport
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 
 	"ota-platform/internal/bootstrap"
 	"ota-platform/internal/config"
+	"ota-platform/internal/observability"
 	"ota-platform/internal/smpp"
 )
 
 func Run(ctx context.Context, logger *zap.Logger) error {
+	shutdownTelemetry, err := observability.Init(ctx, "sms-gateway", logger)
+	if err != nil {
+		return fmt.Errorf("init telemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			logger.Warn("telemetry shutdown failed", zap.Error(err))
+		}
+	}()
+
 	rdb := bootstrap.MustCoordinationStore(logger)
 	defer rdb.Close()
 

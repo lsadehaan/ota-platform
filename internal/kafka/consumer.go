@@ -10,6 +10,8 @@ import (
 
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
+
+	"ota-platform/internal/observability"
 )
 
 const maxRetries = 3
@@ -20,10 +22,10 @@ type MessageHandler func(ctx context.Context, key []byte, value []byte) error
 
 // Consumer wraps a kafka-go reader for consuming messages as part of a consumer group.
 type Consumer struct {
-	reader   *kafka.Reader
-	handler  MessageHandler
-	logger   *zap.Logger
-	retries  map[string]int
+	reader    *kafka.Reader
+	handler   MessageHandler
+	logger    *zap.Logger
+	retries   map[string]int
 	retriesMu sync.Mutex
 }
 
@@ -73,7 +75,9 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 		retryKey := fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)
 
-		if err := c.handler(ctx, msg.Key, msg.Value); err != nil {
+		msgCtx := observability.ExtractKafkaContext(ctx, msg.Headers)
+
+		if err := c.handler(msgCtx, msg.Key, msg.Value); err != nil {
 			c.retriesMu.Lock()
 			c.retries[retryKey]++
 			count := c.retries[retryKey]
@@ -204,7 +208,8 @@ func (cc *ConcurrentConsumer) Start(ctx context.Context) error {
 			for msg := range ch {
 				retryKey := fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)
 
-				if err := cc.handler(ctx, msg.Key, msg.Value); err != nil {
+				msgCtx := observability.ExtractKafkaContext(ctx, msg.Headers)
+				if err := cc.handler(msgCtx, msg.Key, msg.Value); err != nil {
 					cc.retriesMu.Lock()
 					cc.retries[retryKey]++
 					count := cc.retries[retryKey]

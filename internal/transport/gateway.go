@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
 	contractevents "ota-platform/internal/contracts/events"
@@ -33,12 +34,14 @@ type Gateway struct {
 	eventProducer EventProducer // publishes to card-events topic
 	redis         CoordinationStore
 	logger        *zap.Logger
+	telemetry     *gatewayTelemetry
 }
 
 func NewGateway(smppConfig smpp.Config, poolConfig smpp.PoolConfig, kafkaBrokers []string, rdb CoordinationStore, logger *zap.Logger) *Gateway {
 	s := &Gateway{
-		redis:  rdb,
-		logger: logger,
+		redis:     rdb,
+		logger:    logger,
+		telemetry: newGatewayTelemetry(logger),
 	}
 
 	// Create Kafka producer for card-events topic
@@ -89,6 +92,17 @@ func (s *Gateway) handleSendSMS(ctx context.Context, key []byte, value []byte) e
 	if err := json.Unmarshal(value, &msg); err != nil {
 		return fmt.Errorf("unmarshal SendSMSMessage: %w", err)
 	}
+	ctx, span := s.telemetry.startSpan(ctx, "sms-gateway.send-sms",
+		attribute.String("ota.msg_id", msg.MsgID),
+		attribute.String("ota.campaign_id", msg.CampaignID),
+		attribute.String("ota.card_id", msg.CardID),
+		attribute.String("ota.msisdn", msg.MSISDN),
+		attribute.Int("ota.parts", len(msg.Parts)),
+	)
+	var handleErr error
+	defer func() {
+		s.telemetry.finishSpan(span, handleErr)
+	}()
 
 	s.logger.Info("processing send-sms",
 		zap.String("msg_id", msg.MsgID),
@@ -100,7 +114,9 @@ func (s *Gateway) handleSendSMS(ctx context.Context, key []byte, value []byte) e
 	for i, part := range msg.Parts {
 		payload, err := hexutil.Decode(part.Payload)
 		if err != nil {
-			return s.handleSubmitFailure(ctx, &msg, submittedParts, fmt.Errorf("decode hex part %d: %w", part.Sequence, err))
+			handleErr = s.handleSubmitFailure(ctx, &msg, submittedParts, fmt.Errorf("decode hex part %d: %w", part.Sequence, err))
+			s.telemetry.recordSubmitFailure(ctx, "decode_error")
+			return handleErr
 		}
 
 		req := &smpp.SubmitRequest{
@@ -115,13 +131,19 @@ func (s *Gateway) handleSendSMS(ctx context.Context, key []byte, value []byte) e
 		}
 
 		// Submit via pool (blocks if all windows full = back-pressure)
+		submitStart := time.Now()
 		resp, err := s.smppPool.Submit(req)
 		if err != nil {
-			return s.handleSubmitFailure(ctx, &msg, submittedParts, fmt.Errorf("submit part %d: %w", part.Sequence, err))
+			handleErr = s.handleSubmitFailure(ctx, &msg, submittedParts, fmt.Errorf("submit part %d: %w", part.Sequence, err))
+			s.telemetry.recordSubmitFailure(ctx, "transport_error")
+			return handleErr
 		}
 		if resp.Error != nil {
-			return s.handleSubmitFailure(ctx, &msg, submittedParts, fmt.Errorf("submit part %d error: %w", part.Sequence, resp.Error))
+			handleErr = s.handleSubmitFailure(ctx, &msg, submittedParts, fmt.Errorf("submit part %d error: %w", part.Sequence, resp.Error))
+			s.telemetry.recordSubmitFailure(ctx, "submit_error")
+			return handleErr
 		}
+		s.telemetry.recordSubmit(ctx, "ok", time.Since(submitStart))
 
 		// Store SMPP correlation in the coordination store (replaces sync.Map)
 		if err := s.redis.StoreSMPPCorrelation(ctx, resp.MessageID, &redispkg.SMPPMapping{
@@ -130,7 +152,8 @@ func (s *Gateway) handleSendSMS(ctx context.Context, key []byte, value []byte) e
 			CardID:     msg.CardID,
 			MSISDN:     msg.MSISDN,
 		}); err != nil {
-			return fmt.Errorf("store smpp correlation for part %d: %w", part.Sequence, err)
+			handleErr = fmt.Errorf("store smpp correlation for part %d: %w", part.Sequence, err)
+			return handleErr
 		}
 
 		s.logger.Info("SMPP submit ok",
@@ -186,11 +209,15 @@ func (s *Gateway) handleSubmitFailure(ctx context.Context, msg *kafkapkg.SendSMS
 }
 
 func (s *Gateway) handleDLR(ctx context.Context, sourceAddr string, payload []byte) {
+	ctx, span := s.telemetry.startSpan(ctx, "sms-gateway.handle-dlr")
+	defer s.telemetry.finishSpan(span, nil)
+
 	receipt := smpp.ParseDLRReceipt(string(payload))
 	if receipt == nil {
 		s.logger.Warn("failed to parse DLR receipt", zap.String("payload", string(payload)))
 		return
 	}
+	s.telemetry.recordDLR(ctx, receipt.Status)
 
 	// Look up internal msg_id from Redis
 	var msgID, campaignID, cardID string
@@ -235,6 +262,12 @@ func (s *Gateway) handleDLR(ctx context.Context, sourceAddr string, payload []by
 }
 
 func (s *Gateway) handleMO(ctx context.Context, sourceAddr, destAddr string, payload []byte) {
+	ctx, span := s.telemetry.startSpan(ctx, "sms-gateway.handle-mo",
+		attribute.String("ota.source_msisdn", sourceAddr),
+	)
+	defer s.telemetry.finishSpan(span, nil)
+	s.telemetry.recordMO(ctx)
+
 	cardID, err := s.redis.LookupCardByMSISDN(ctx, sourceAddr)
 	if err != nil {
 		s.logger.Warn("failed to resolve MO source msisdn",

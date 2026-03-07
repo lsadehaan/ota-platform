@@ -6,6 +6,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -15,11 +19,15 @@ import (
 
 // Service publishes planner-owned campaign shards to Kafka.
 type Service struct {
-	db           *gorm.DB
-	publisher    Publisher
-	logger       *zap.Logger
-	pollInterval time.Duration
-	batchSize    int
+	db              *gorm.DB
+	publisher       Publisher
+	logger          *zap.Logger
+	pollInterval    time.Duration
+	batchSize       int
+	tracer          trace.Tracer
+	shardsClaimed   metric.Int64Counter
+	shardsPublished metric.Int64Counter
+	publishDuration metric.Float64Histogram
 }
 
 type Publisher interface {
@@ -27,12 +35,29 @@ type Publisher interface {
 }
 
 func NewService(database *gorm.DB, publisher Publisher, logger *zap.Logger) *Service {
+	meter := otel.Meter("campaign-planner")
+	shardsClaimed, err := meter.Int64Counter("ota.planner.shards_claimed", metric.WithDescription("Planner shards claimed"))
+	if err != nil {
+		logger.Warn("create planner shards_claimed metric", zap.Error(err))
+	}
+	shardsPublished, err := meter.Int64Counter("ota.planner.shards_published", metric.WithDescription("Planner shards published"))
+	if err != nil {
+		logger.Warn("create planner shards_published metric", zap.Error(err))
+	}
+	publishDuration, err := meter.Float64Histogram("ota.planner.publish_duration_ms", metric.WithDescription("Planner batch publish duration in milliseconds"))
+	if err != nil {
+		logger.Warn("create planner publish_duration metric", zap.Error(err))
+	}
 	return &Service{
-		db:           database,
-		publisher:    publisher,
-		logger:       logger,
-		pollInterval: 100 * time.Millisecond,
-		batchSize:    100,
+		db:              database,
+		publisher:       publisher,
+		logger:          logger,
+		pollInterval:    100 * time.Millisecond,
+		batchSize:       100,
+		tracer:          otel.Tracer("campaign-planner"),
+		shardsClaimed:   shardsClaimed,
+		shardsPublished: shardsPublished,
+		publishDuration: publishDuration,
 	}
 }
 
@@ -51,6 +76,15 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 func (s *Service) publishBatch(ctx context.Context) {
+	started := time.Now()
+	ctx, span := s.tracer.Start(ctx, "planner.publish-batch")
+	defer func() {
+		if s.publishDuration != nil {
+			s.publishDuration.Record(ctx, float64(time.Since(started).Milliseconds()))
+		}
+		span.End()
+	}()
+
 	var shards []db.CampaignShard
 	claimErr := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		return tx.Raw(`
@@ -69,14 +103,21 @@ func (s *Service) publishBatch(ctx context.Context) {
 		`, s.batchSize).Scan(&shards).Error
 	})
 	if claimErr != nil {
+		span.RecordError(claimErr)
+		span.SetStatus(codes.Error, claimErr.Error())
 		s.logger.Error("failed to claim campaign shards", zap.Error(claimErr))
 		return
 	}
 	if len(shards) == 0 {
+		span.SetStatus(codes.Ok, "no shards")
 		return
+	}
+	if s.shardsClaimed != nil {
+		s.shardsClaimed.Add(ctx, int64(len(shards)))
 	}
 
 	s.publishClaimedShards(ctx, shards)
+	span.SetStatus(codes.Ok, "")
 }
 
 func (s *Service) publishClaimedShards(ctx context.Context, shards []db.CampaignShard) {
@@ -162,4 +203,7 @@ func (s *Service) publishClaimedShards(ctx context.Context, shards []db.Campaign
 	}
 
 	s.logger.Debug("published campaign shard batch", zap.Int("count", len(publishedIDs)))
+	if s.shardsPublished != nil {
+		s.shardsPublished.Add(ctx, int64(len(publishedIDs)))
+	}
 }

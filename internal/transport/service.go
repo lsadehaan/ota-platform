@@ -47,6 +47,7 @@ func NewServiceWithDeps(smppClient SMPPClient, eventProducer EventProducer, stor
 		eventProducer: eventProducer,
 		redis:         store,
 		logger:        logger,
+		telemetry:     newGatewayTelemetry(logger),
 	}
 }
 

@@ -34,6 +34,7 @@ type CardWorker struct {
 	eventProducer Producer // publishes to card-events topic (for self-triggering next steps)
 	wsHub         WSHub
 	logger        *zap.Logger
+	telemetry     *executorTelemetry
 }
 
 // NewCardWorker creates a new CardWorker.
@@ -47,6 +48,7 @@ func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb Coordin
 		eventProducer: eventProducer,
 		wsHub:         wsHub,
 		logger:        logger,
+		telemetry:     newExecutorTelemetry(logger),
 	}
 }
 
@@ -57,6 +59,11 @@ func (w *CardWorker) HandleEvent(ctx context.Context, key []byte, value []byte) 
 		w.logger.Error("unmarshal card event", zap.Error(err))
 		return err // will be retried by consumer
 	}
+	ctx, span, started := w.telemetry.startEvent(ctx, event.Type, event.CampaignID, event.CardID, event.Step)
+	var handleErr error
+	defer func() {
+		w.telemetry.finishEvent(ctx, span, started, event.Type, handleErr)
+	}()
 
 	// Idempotency check
 	isNew, err := w.redis.CheckAndSetDedupe(ctx, event.EventID)
@@ -69,15 +76,16 @@ func (w *CardWorker) HandleEvent(ctx context.Context, key []byte, value []byte) 
 
 	switch event.Type {
 	case "card.activate":
-		return w.handleActivate(ctx, &event)
+		handleErr = w.handleActivate(ctx, &event)
 	case "card.dlr_received":
-		return w.handleDLR(ctx, &event)
+		handleErr = w.handleDLR(ctx, &event)
 	case "card.mo_received":
-		return w.handleMO(ctx, &event)
+		handleErr = w.handleMO(ctx, &event)
 	default:
 		w.logger.Warn("unknown event type", zap.String("type", event.Type))
-		return nil
+		handleErr = nil
 	}
+	return handleErr
 }
 
 // handleActivate builds and sends the OTA command for the given card step.
@@ -226,6 +234,7 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 				RetryCount: event.RetryCount,
 				Timestamp:  time.Now(),
 			}
+			w.telemetry.recordRetry(ctx, "throttle")
 			return w.eventProducer.Publish(ctx, event.CardID, retryEvent)
 		}
 	}
@@ -469,6 +478,7 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 			zap.String("card_id", event.CardID),
 			zap.String("error_code", event.ErrorCode),
 		)
+		w.telemetry.recordCardProcessed(ctx, "failed_partial_submit")
 
 		w.checkCampaignComplete(ctx, event.CampaignID)
 	case "FAILED_SUBMIT", "FAILED", "UNDELIV", "EXPIRED", "DELETED", "REJECTD":
@@ -489,6 +499,7 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 				RetryCount: state.RetryCount + 1,
 				Timestamp:  time.Now(),
 			}
+			w.telemetry.recordRetry(ctx, "dlr_failure")
 
 			w.logger.Info("retrying card after DLR failure",
 				zap.String("campaign_id", event.CampaignID),
@@ -545,6 +556,7 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 			zap.String("card_id", event.CardID),
 			zap.Int("retries", state.RetryCount+1),
 		)
+		w.telemetry.recordCardProcessed(ctx, "failed_dlr")
 
 		// Check if campaign is now complete.
 		w.checkCampaignComplete(ctx, event.CampaignID)
@@ -731,6 +743,7 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 		zap.String("card_id", event.CardID),
 		zap.Uint8("status_code", resp.StatusCode),
 	)
+	w.telemetry.recordCardProcessed(ctx, "failed_por")
 
 	w.checkCampaignComplete(ctx, event.CampaignID)
 	return nil
@@ -777,6 +790,7 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 			zap.String("campaign_id", event.CampaignID),
 			zap.String("card_id", event.CardID),
 		)
+		w.telemetry.recordCardProcessed(ctx, "completed")
 
 		// Check if campaign is complete.
 		w.checkCampaignComplete(ctx, event.CampaignID)

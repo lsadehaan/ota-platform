@@ -8,6 +8,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
 
 	contractevents "ota-platform/internal/contracts/events"
@@ -24,16 +28,31 @@ type LogWriter struct {
 	incoming      chan kafkapkg.MessageLogAction
 	batchSize     int
 	flushInterval time.Duration
+	tracer        trace.Tracer
+	actionsTotal  metric.Int64Counter
+	flushDuration metric.Float64Histogram
 }
 
 // NewLogWriter creates a new LogWriter that consumes from the message-log Kafka topic.
 func NewLogWriter(store MessageLogStore, brokers []string, logger *zap.Logger) *LogWriter {
+	meter := otel.Meter("read-model-projector")
+	actionsTotal, err := meter.Int64Counter("ota.projector.actions_processed", metric.WithDescription("Message log actions processed"))
+	if err != nil {
+		logger.Warn("create projector actions_processed metric", zap.Error(err))
+	}
+	flushDuration, err := meter.Float64Histogram("ota.projector.flush_duration_ms", metric.WithDescription("Projector flush duration in milliseconds"))
+	if err != nil {
+		logger.Warn("create projector flush_duration metric", zap.Error(err))
+	}
 	lw := &LogWriter{
 		store:         store,
 		logger:        logger,
 		incoming:      make(chan kafkapkg.MessageLogAction, 5000),
 		batchSize:     500,
 		flushInterval: 100 * time.Millisecond,
+		tracer:        otel.Tracer("read-model-projector"),
+		actionsTotal:  actionsTotal,
+		flushDuration: flushDuration,
 	}
 
 	lw.consumer = kafkapkg.NewConsumer(
@@ -57,17 +76,28 @@ func (lw *LogWriter) Start(ctx context.Context) {
 }
 
 func (lw *LogWriter) handleMessage(ctx context.Context, key []byte, value []byte) error {
+	ctx, span := lw.tracer.Start(ctx, "projector.handle-message")
+	defer span.End()
+
 	var action kafkapkg.MessageLogAction
 	if err := json.Unmarshal(value, &action); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
 		lw.logger.Error("unmarshal message log action", zap.Error(err))
 		return nil // don't retry unmarshal errors
+	}
+	if lw.actionsTotal != nil {
+		lw.actionsTotal.Add(ctx, 1)
 	}
 
 	select {
 	case lw.incoming <- action:
 	case <-ctx.Done():
+		span.RecordError(ctx.Err())
+		span.SetStatus(codes.Error, ctx.Err().Error())
 		return ctx.Err()
 	}
+	span.SetStatus(codes.Ok, "")
 	return nil
 }
 
@@ -78,6 +108,10 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context) {
 	defer ticker.Stop()
 
 	flush := func() {
+		if len(creates) == 0 && len(updates) == 0 {
+			return
+		}
+		started := time.Now()
 		if len(creates) > 0 {
 			if err := lw.store.CreateBatch(ctx, creates, lw.batchSize); err != nil {
 				lw.logger.Error("batch create message logs failed", zap.Int("count", len(creates)), zap.Error(err))
@@ -89,6 +123,9 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context) {
 				lw.logger.Error("batch update message logs failed", zap.Int("count", len(updates)), zap.Error(err))
 			}
 			updates = updates[:0]
+		}
+		if lw.flushDuration != nil {
+			lw.flushDuration.Record(ctx, float64(time.Since(started).Milliseconds()))
 		}
 	}
 

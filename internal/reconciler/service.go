@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -16,15 +18,28 @@ type Service struct {
 	reclaimInterval time.Duration
 	cleanupInterval time.Duration
 	retention       time.Duration
+	reclaimedTotal  metric.Int64Counter
+	cleanedTotal    metric.Int64Counter
 }
 
 func NewService(database *gorm.DB, logger *zap.Logger) *Service {
+	meter := otel.Meter("reconciler")
+	reclaimedTotal, err := meter.Int64Counter("ota.reconciler.shards_reclaimed", metric.WithDescription("Campaign shards reclaimed by the reconciler"))
+	if err != nil {
+		logger.Warn("create reconciler shards_reclaimed metric", zap.Error(err))
+	}
+	cleanedTotal, err := meter.Int64Counter("ota.reconciler.shards_cleaned", metric.WithDescription("Published campaign shards cleaned by the reconciler"))
+	if err != nil {
+		logger.Warn("create reconciler shards_cleaned metric", zap.Error(err))
+	}
 	return &Service{
 		db:              database,
 		logger:          logger,
 		reclaimInterval: 1 * time.Minute,
 		cleanupInterval: 10 * time.Minute,
 		retention:       24 * time.Hour,
+		reclaimedTotal:  reclaimedTotal,
+		cleanedTotal:    cleanedTotal,
 	}
 }
 
@@ -62,6 +77,9 @@ func (s *Service) reclaimStaleCampaignShards(ctx context.Context) {
 		return
 	}
 	if result.RowsAffected > 0 {
+		if s.reclaimedTotal != nil {
+			s.reclaimedTotal.Add(ctx, result.RowsAffected)
+		}
 		s.logger.Info("reclaimed stale campaign shards", zap.Int64("count", result.RowsAffected))
 	}
 }
@@ -75,6 +93,9 @@ func (s *Service) cleanupPublishedCampaignShards(ctx context.Context) {
 		return
 	}
 	if result.RowsAffected > 0 {
+		if s.cleanedTotal != nil {
+			s.cleanedTotal.Add(ctx, result.RowsAffected)
+		}
 		s.logger.Info("cleaned published campaign shards", zap.Int64("count", result.RowsAffected))
 	}
 }

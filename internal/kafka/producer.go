@@ -7,6 +7,8 @@ import (
 
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
+
+	"ota-platform/internal/observability"
 )
 
 // Producer wraps a kafka-go writer for producing messages.
@@ -46,6 +48,7 @@ func (p *Producer) Publish(ctx context.Context, key string, value interface{}) e
 		Key:   []byte(key),
 		Value: data,
 	}
+	observability.InjectKafkaHeaders(ctx, &msg.Headers)
 
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {
 		p.logger.Error("failed to publish kafka message",
@@ -87,6 +90,7 @@ func (p *Producer) PublishBatch(ctx context.Context, items []BatchItem) error {
 			Key:   []byte(item.Key),
 			Value: data,
 		})
+		observability.InjectKafkaHeaders(ctx, &msgs[len(msgs)-1].Headers)
 	}
 
 	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
@@ -111,6 +115,7 @@ func (p *Producer) PublishRaw(ctx context.Context, key string, value []byte) err
 		Key:   []byte(key),
 		Value: value,
 	}
+	observability.InjectKafkaHeaders(ctx, &msg.Headers)
 
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {
 		p.logger.Error("failed to publish raw kafka message",

@@ -2,15 +2,30 @@ package planner
 
 import (
 	"context"
+	"fmt"
+	"time"
 
 	"go.uber.org/zap"
 
 	"ota-platform/internal/bootstrap"
 	contractevents "ota-platform/internal/contracts/events"
 	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/observability"
 )
 
 func Run(ctx context.Context, logger *zap.Logger) error {
+	shutdownTelemetry, err := observability.Init(ctx, "campaign-planner", logger)
+	if err != nil {
+		return fmt.Errorf("init telemetry: %w", err)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTelemetry(shutdownCtx); err != nil {
+			logger.Warn("telemetry shutdown failed", zap.Error(err))
+		}
+	}()
+
 	database := bootstrap.MustGormDB(logger)
 	producer := kafkapkg.NewProducer(bootstrap.KafkaBrokers(), contractevents.TopicCardEvents, logger.Named("planner-producer"))
 	defer producer.Close()
