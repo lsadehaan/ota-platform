@@ -71,6 +71,7 @@ func TestLocalStackCampaignLifecycle(t *testing.T) {
 		},
 	}
 	cardCount := getenvInt("E2E_CARD_COUNT", 50)
+	campaignTimeout := getenvDuration("E2E_CAMPAIGN_TIMEOUT", 2*time.Minute)
 	if err := waitForHealthy(client, 2*time.Minute); err != nil {
 		t.Fatalf("wait for stack health: %v", err)
 	}
@@ -81,7 +82,7 @@ func TestLocalStackCampaignLifecycle(t *testing.T) {
 	campaignID := createCampaign(t, client, prefix, appID, cardIDs)
 
 	wallStart := time.Now()
-	campaign := waitForCampaignTerminal(t, client, campaignID, 2*time.Minute)
+	campaign := waitForCampaignTerminal(t, client, campaignID, campaignTimeout)
 	wallElapsed := time.Since(wallStart)
 
 	if campaign.FailedCards != 0 {
@@ -311,6 +312,15 @@ func getenv(key, fallback string) string {
 func getenvInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return fallback
+}
+
+func getenvDuration(key string, fallback time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if parsed, err := time.ParseDuration(v); err == nil && parsed > 0 {
 			return parsed
 		}
 	}

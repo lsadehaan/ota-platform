@@ -42,6 +42,7 @@ func main() {
 		executorList = flag.String("executors", "1,2", "comma-separated executor replica counts")
 		gatewayList  = flag.String("gateways", "1,2", "comma-separated gateway replica counts")
 		networkName  = flag.String("network", "deployments_default", "compose network name for e2e test container")
+		campaignTO   = flag.String("campaign-timeout", "2m", "campaign completion timeout passed to the E2E test")
 		build        = flag.Bool("build", false, "rebuild service images before running scenarios")
 		keepStack    = flag.Bool("keep-stack", false, "leave the last scenario stack running")
 		output       = flag.String("output", "", "optional markdown report output path")
@@ -65,7 +66,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "compose up for scenario %d: %v\n", i+1, err)
 			os.Exit(1)
 		}
-		res, err := runScenario(files, *networkName, sc)
+		res, err := runScenario(files, *networkName, *campaignTO, sc)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "scenario %d failed: %v\n", i+1, err)
 			os.Exit(1)
@@ -154,13 +155,14 @@ func composeArgs(files []string) []string {
 	return args
 }
 
-func runScenario(files []string, networkName string, sc scenario) (result, error) {
+func runScenario(files []string, networkName, campaignTimeout string, sc scenario) (result, error) {
 	cmd := exec.Command("docker", "run", "--rm",
 		"--network", networkName,
 		"-v", fmt.Sprintf("%s:/workspace", mustGetwd()),
 		"-w", "/workspace",
 		"-e", "E2E_BASE_URL=http://ota-api:8080",
 		"-e", fmt.Sprintf("E2E_CARD_COUNT=%d", sc.Cards),
+		"-e", fmt.Sprintf("E2E_CAMPAIGN_TIMEOUT=%s", campaignTimeout),
 		"golang:1.26-alpine",
 		"sh", "-lc", "export PATH=/usr/local/go/bin:$PATH && apk add --no-cache git >/dev/null && GOCACHE=/tmp/go-build go test -tags=e2e ./e2e -v -count=1",
 	)
