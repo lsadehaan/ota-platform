@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,6 +25,7 @@ const (
 	sendSMSTopic    = contractevents.TopicSendSMS
 	cardEventsTopic = contractevents.TopicCardEvents
 	consumerGroup   = "sms-gateway"
+	correlationTTL  = 5 * time.Minute
 )
 
 // Gateway consumes from the send-sms Kafka topic, submits SMS messages via SMPP pool,
@@ -35,6 +37,12 @@ type Gateway struct {
 	redis         CoordinationStore
 	logger        *zap.Logger
 	telemetry     *gatewayTelemetry
+	correlations  sync.Map
+}
+
+type correlationEntry struct {
+	mapping   *redispkg.SMPPMapping
+	expiresAt time.Time
 }
 
 func NewGateway(smppConfig smpp.Config, poolConfig smpp.PoolConfig, kafkaBrokers []string, rdb CoordinationStore, logger *zap.Logger) *Gateway {
@@ -80,6 +88,7 @@ func (s *Gateway) Start(ctx context.Context) error {
 		return fmt.Errorf("connect SMPP pool: %w", err)
 	}
 	s.logger.Info("SMPP pool connected", zap.Int("active", s.smppPool.ActiveConnections()))
+	go s.cleanupCorrelations(ctx)
 
 	if err := s.consumer.Start(ctx); err != nil {
 		return fmt.Errorf("kafka consumer: %w", err)
@@ -145,13 +154,16 @@ func (s *Gateway) handleSendSMS(ctx context.Context, key []byte, value []byte) e
 		}
 		s.telemetry.recordSubmit(ctx, "ok", time.Since(submitStart))
 
-		// Store SMPP correlation in the coordination store (replaces sync.Map)
-		if err := s.redis.StoreSMPPCorrelation(ctx, resp.MessageID, &redispkg.SMPPMapping{
+		mapping := &redispkg.SMPPMapping{
 			MsgID:      msg.MsgID,
 			CampaignID: msg.CampaignID,
 			CardID:     msg.CardID,
 			MSISDN:     msg.MSISDN,
-		}); err != nil {
+		}
+		s.storeLocalCorrelation(resp.MessageID, mapping)
+
+		// Store SMPP correlation durably in the coordination store.
+		if err := s.redis.StoreSMPPCorrelation(ctx, resp.MessageID, mapping); err != nil {
 			handleErr = fmt.Errorf("store smpp correlation for part %d: %w", part.Sequence, err)
 			return handleErr
 		}
@@ -219,16 +231,17 @@ func (s *Gateway) handleDLR(ctx context.Context, sourceAddr string, payload []by
 	}
 	s.telemetry.recordDLR(ctx, receipt.Status)
 
-	// Look up internal msg_id from Redis
+	// Look up internal msg_id with a local fast-path and bounded
+	// shared-store backoff for distributed correctness.
 	var msgID, campaignID, cardID string
-	mapping, err := s.redis.LoadSMPPCorrelation(ctx, receipt.MessageID)
-	if err != nil {
-		s.logger.Warn("Redis correlation lookup failed", zap.Error(err))
-	}
+	mapping, err := s.loadCorrelation(ctx, receipt.MessageID)
 	if mapping != nil {
 		msgID = mapping.MsgID
 		campaignID = mapping.CampaignID
 		cardID = mapping.CardID
+	}
+	if err != nil {
+		s.logger.Warn("correlation lookup failed", zap.Error(err))
 	}
 
 	if cardID == "" {
@@ -258,6 +271,88 @@ func (s *Gateway) handleDLR(ctx context.Context, sourceAddr string, payload []by
 			zap.String("campaign_id", campaignID),
 			zap.Error(err),
 		)
+	}
+}
+
+func (s *Gateway) storeLocalCorrelation(smppMsgID string, mapping *redispkg.SMPPMapping) {
+	s.correlations.Store(smppMsgID, &correlationEntry{
+		mapping:   mapping,
+		expiresAt: time.Now().Add(correlationTTL),
+	})
+}
+
+func (s *Gateway) loadCorrelation(ctx context.Context, smppMsgID string) (*redispkg.SMPPMapping, error) {
+	if mapping, ok := s.loadLocalCorrelation(smppMsgID); ok {
+		s.correlations.Delete(smppMsgID)
+		return mapping, nil
+	}
+
+	backoff := 10 * time.Millisecond
+	deadline := time.Now().Add(time.Second)
+
+	for {
+		mapping, err := s.redis.LoadSMPPCorrelation(ctx, smppMsgID)
+		if err != nil {
+			return nil, err
+		}
+		if mapping != nil {
+			s.correlations.Delete(smppMsgID)
+			return mapping, nil
+		}
+		if time.Now().After(deadline) {
+			return nil, nil
+		}
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+
+		if mapping, ok := s.loadLocalCorrelation(smppMsgID); ok {
+			s.correlations.Delete(smppMsgID)
+			return mapping, nil
+		}
+
+		backoff *= 2
+		if backoff > 100*time.Millisecond {
+			backoff = 100 * time.Millisecond
+		}
+	}
+}
+
+func (s *Gateway) loadLocalCorrelation(smppMsgID string) (*redispkg.SMPPMapping, bool) {
+	entry, ok := s.correlations.Load(smppMsgID)
+	if !ok {
+		return nil, false
+	}
+	corr := entry.(*correlationEntry)
+	if time.Now().After(corr.expiresAt) {
+		s.correlations.Delete(smppMsgID)
+		return nil, false
+	}
+	return corr.mapping, true
+}
+
+func (s *Gateway) cleanupCorrelations(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			s.correlations.Range(func(key, value any) bool {
+				entry, ok := value.(*correlationEntry)
+				if !ok || now.After(entry.expiresAt) {
+					s.correlations.Delete(key)
+				}
+				return true
+			})
+		}
 	}
 }
 

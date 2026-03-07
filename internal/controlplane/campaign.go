@@ -16,7 +16,7 @@ import (
 	"ota-platform/pkg/gsm0348"
 )
 
-const campaignShardSize = 500
+const campaignShardSize = 100
 
 // CampaignService orchestrates campaign lifecycle: starting, pausing, resuming,
 // and aborting campaigns. Card-level processing (OTA command building, DLR/MO
@@ -416,41 +416,45 @@ func (cs *CampaignService) forEachCampaignTargetBatch(ctx context.Context, dbtx 
 		batchSize = campaignShardSize
 	}
 
-	rows, err := dbtx.WithContext(ctx).
-		Model(&db.CampaignTarget{}).
-		Select("card_id").
-		Where("campaign_id = ?", campaignID).
-		Order("card_id ASC").
-		Rows()
-	if err != nil {
-		return err
+	type targetRow struct {
+		CardID uuid.UUID `gorm:"column:card_id"`
 	}
-	defer rows.Close()
 
-	cardIDs := make([]uuid.UUID, 0, batchSize)
-	for rows.Next() {
-		var cardIDRaw string
-		if err := rows.Scan(&cardIDRaw); err != nil {
+	var lastCardID *uuid.UUID
+	for {
+		query := dbtx.WithContext(ctx).
+			Model(&db.CampaignTarget{}).
+			Select("card_id").
+			Where("campaign_id = ?", campaignID)
+		if lastCardID != nil {
+			query = query.Where("card_id > ?", *lastCardID)
+		}
+
+		var batchRows []targetRow
+		if err := query.
+			Order("card_id ASC").
+			Limit(batchSize).
+			Find(&batchRows).Error; err != nil {
 			return err
 		}
-		cardID, err := uuid.Parse(cardIDRaw)
-		if err != nil {
-			return fmt.Errorf("parse campaign target card_id %q: %w", cardIDRaw, err)
+		if len(batchRows) == 0 {
+			return nil
 		}
-		cardIDs = append(cardIDs, cardID)
-		if len(cardIDs) >= batchSize {
-			if err := fn(cardIDs); err != nil {
-				return err
-			}
-			cardIDs = make([]uuid.UUID, 0, batchSize)
+
+		cardIDs := make([]uuid.UUID, 0, len(batchRows))
+		for _, row := range batchRows {
+			cardIDs = append(cardIDs, row.CardID)
 		}
-	}
-	if len(cardIDs) > 0 {
 		if err := fn(cardIDs); err != nil {
 			return err
 		}
+
+		last := batchRows[len(batchRows)-1].CardID
+		lastCardID = &last
+		if len(batchRows) < batchSize {
+			return nil
+		}
 	}
-	return rows.Err()
 }
 
 // ---------------------------------------------------------------------------

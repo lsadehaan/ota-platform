@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
@@ -17,14 +18,33 @@ type Producer struct {
 	logger *zap.Logger
 }
 
+type ProducerOptions struct {
+	RequiredAcks kafka.RequiredAcks
+	Async        bool
+	BatchSize    int
+	BatchTimeout time.Duration
+}
+
 // NewProducer creates a new Kafka producer for the given topic.
 func NewProducer(brokers []string, topic string, logger *zap.Logger) *Producer {
+	return NewProducerWithOptions(brokers, topic, ProducerOptions{
+		RequiredAcks: kafka.RequireAll,
+	}, logger)
+}
+
+// NewProducerWithOptions creates a Kafka producer with explicit writer options.
+func NewProducerWithOptions(brokers []string, topic string, opts ProducerOptions, logger *zap.Logger) *Producer {
+	if opts.RequiredAcks == 0 {
+		opts.RequiredAcks = kafka.RequireAll
+	}
 	w := &kafka.Writer{
 		Addr:         kafka.TCP(brokers...),
 		Topic:        topic,
 		Balancer:     &kafka.Hash{},
-		RequiredAcks: kafka.RequireAll,
-		Async:        false,
+		RequiredAcks: opts.RequiredAcks,
+		Async:        opts.Async,
+		BatchSize:    opts.BatchSize,
+		BatchTimeout: opts.BatchTimeout,
 	}
 	return &Producer{
 		writer: w,

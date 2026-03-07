@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 
 	"ota-platform/internal/bootstrap"
@@ -39,7 +40,12 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	smsProducer := kafkapkg.NewProducer(kafkaBrokers, contractevents.TopicSendSMS, logger.Named("sms-producer"))
 	defer smsProducer.Close()
 
-	logProducer := kafkapkg.NewProducer(kafkaBrokers, contractevents.TopicMessageLog, logger.Named("log-producer"))
+	logProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicMessageLog, kafkapkg.ProducerOptions{
+		RequiredAcks: kafka.RequireAll,
+		Async:        true,
+		BatchSize:    256,
+		BatchTimeout: 10 * time.Millisecond,
+	}, logger.Named("log-producer"))
 	defer logProducer.Close()
 
 	eventProducer := kafkapkg.NewProducer(kafkaBrokers, contractevents.TopicCardEvents, logger.Named("event-producer"))

@@ -1,4 +1,12 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080'
+function resolveAPIBase(): string {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, '')
+  }
+  if (typeof window !== 'undefined') {
+    return ''
+  }
+  return (process.env.INTERNAL_API_URL || 'http://ota-api:8080').replace(/\/$/, '')
+}
 
 interface PaginatedResponse<T> {
   data: T[]
@@ -15,7 +23,8 @@ interface FetchOptions {
 }
 
 async function fetchAPI<T>(path: string, options: FetchOptions = {}): Promise<T> {
-  const url = new URL(`${API_BASE}${path}`)
+  const base = resolveAPIBase()
+  const url = new URL(base ? `${base}${path}` : path, typeof window !== 'undefined' ? window.location.origin : undefined)
   if (options.params) {
     Object.entries(options.params).forEach(([k, v]) => url.searchParams.set(k, v))
   }

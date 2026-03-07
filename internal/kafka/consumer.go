@@ -17,7 +17,7 @@ import (
 const maxRetries = 3
 
 // MessageHandler is called for each consumed message. Returning a non-nil error
-// causes the consumer to log the error and continue (the message is still committed).
+// causes the consumer to retry inline before the message is treated as a poison pill.
 type MessageHandler func(ctx context.Context, key []byte, value []byte) error
 
 // Consumer wraps a kafka-go reader for consuming messages as part of a consumer group.
@@ -47,8 +47,8 @@ func NewConsumer(brokers []string, topic string, groupID string, handler Message
 }
 
 // Start begins consuming messages in a loop. It blocks until ctx is cancelled.
-// Each successfully handled message is committed. If the handler returns an error
-// the message is still committed but the error is logged.
+// Each successfully handled message is committed. Handler errors are retried inline;
+// if all retries fail the message is treated as a poison pill and committed to skip it.
 func (c *Consumer) Start(ctx context.Context) error {
 	c.logger.Info("kafka consumer started",
 		zap.String("topic", c.reader.Config().Topic),
@@ -73,42 +73,17 @@ func (c *Consumer) Start(ctx context.Context) error {
 			zap.String("key", string(msg.Key)),
 		)
 
-		retryKey := fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)
-
 		msgCtx := observability.ExtractKafkaContext(ctx, msg.Headers)
-
-		if err := c.handler(msgCtx, msg.Key, msg.Value); err != nil {
-			c.retriesMu.Lock()
-			c.retries[retryKey]++
-			count := c.retries[retryKey]
-			c.retriesMu.Unlock()
-
-			if count < maxRetries {
-				c.logger.Warn("handler error, will redeliver",
-					zap.String("topic", msg.Topic),
-					zap.Int("partition", msg.Partition),
-					zap.Int64("offset", msg.Offset),
-					zap.Int("retry", count),
-					zap.Error(err),
-				)
-				// Do NOT commit — message will be redelivered.
-				continue
-			}
-
+		if err := c.handleWithRetry(msgCtx, msg); err != nil {
 			c.logger.Error("poison pill: handler failed after max retries, committing to skip",
 				zap.String("topic", msg.Topic),
 				zap.Int("partition", msg.Partition),
 				zap.Int64("offset", msg.Offset),
-				zap.Int("retries", count),
+				zap.Int("retries", maxRetries),
 				zap.String("key", string(msg.Key)),
 				zap.Error(err),
 			)
 		}
-
-		// Success or poison pill — commit offset and clear retry counter.
-		c.retriesMu.Lock()
-		delete(c.retries, retryKey)
-		c.retriesMu.Unlock()
 
 		if err := c.reader.CommitMessages(ctx, msg); err != nil {
 			c.logger.Error("failed to commit kafka message",
@@ -119,6 +94,33 @@ func (c *Consumer) Start(ctx context.Context) error {
 			)
 		}
 	}
+}
+
+func (c *Consumer) handleWithRetry(ctx context.Context, msg kafka.Message) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := c.handler(ctx, msg.Key, msg.Value); err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				c.logger.Warn("handler error, retrying inline",
+					zap.String("topic", msg.Topic),
+					zap.Int("partition", msg.Partition),
+					zap.Int64("offset", msg.Offset),
+					zap.Int("attempt", attempt),
+					zap.Error(err),
+				)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Duration(attempt) * 50 * time.Millisecond):
+				}
+				continue
+			}
+			return lastErr
+		}
+		return nil
+	}
+	return lastErr
 }
 
 // Close closes the consumer, leaving the consumer group.
@@ -163,7 +165,7 @@ func NewConcurrentConsumer(brokers []string, topic, groupID string, workers int,
 		MinBytes:       1,
 		MaxBytes:       10e6,
 		CommitInterval: 0, // manual commits only
-		StartOffset:    kafka.LastOffset,
+		StartOffset:    kafka.FirstOffset,
 	})
 	return &ConcurrentConsumer{
 		reader:  reader,
@@ -206,42 +208,18 @@ func (cc *ConcurrentConsumer) Start(ctx context.Context) error {
 		go func(ch chan kafka.Message, workerID int) {
 			defer wg.Done()
 			for msg := range ch {
-				retryKey := fmt.Sprintf("%s:%d:%d", msg.Topic, msg.Partition, msg.Offset)
-
 				msgCtx := observability.ExtractKafkaContext(ctx, msg.Headers)
-				if err := cc.handler(msgCtx, msg.Key, msg.Value); err != nil {
-					cc.retriesMu.Lock()
-					cc.retries[retryKey]++
-					count := cc.retries[retryKey]
-					cc.retriesMu.Unlock()
-
-					if count < maxRetries {
-						cc.logger.Warn("worker handler error, will redeliver",
-							zap.Int("worker", workerID),
-							zap.String("topic", msg.Topic),
-							zap.Int("partition", msg.Partition),
-							zap.Int64("offset", msg.Offset),
-							zap.Int("retry", count),
-							zap.Error(err),
-						)
-						continue // skip commit — message will be redelivered
-					}
-
+				if err := cc.handleWithRetry(msgCtx, msg, workerID); err != nil {
 					cc.logger.Error("poison pill: handler failed after max retries, committing to skip",
 						zap.Int("worker", workerID),
 						zap.String("topic", msg.Topic),
 						zap.Int("partition", msg.Partition),
 						zap.Int64("offset", msg.Offset),
-						zap.Int("retries", count),
+						zap.Int("retries", maxRetries),
 						zap.String("key", string(msg.Key)),
 						zap.Error(err),
 					)
 				}
-
-				// Success or poison pill — clear retry counter, send to commit goroutine.
-				cc.retriesMu.Lock()
-				delete(cc.retries, retryKey)
-				cc.retriesMu.Unlock()
 
 				commitCh <- msg
 			}
@@ -275,6 +253,34 @@ func (cc *ConcurrentConsumer) Start(ctx context.Context) error {
 	commitWg.Wait()
 
 	return ctx.Err()
+}
+
+func (cc *ConcurrentConsumer) handleWithRetry(ctx context.Context, msg kafka.Message, workerID int) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		if err := cc.handler(ctx, msg.Key, msg.Value); err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				cc.logger.Warn("worker handler error, retrying inline",
+					zap.Int("worker", workerID),
+					zap.String("topic", msg.Topic),
+					zap.Int("partition", msg.Partition),
+					zap.Int64("offset", msg.Offset),
+					zap.Int("attempt", attempt),
+					zap.Error(err),
+				)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-time.After(time.Duration(attempt) * 50 * time.Millisecond):
+				}
+				continue
+			}
+			return lastErr
+		}
+		return nil
+	}
+	return lastErr
 }
 
 // commitLoop receives completed messages, tracks them per partition, and commits

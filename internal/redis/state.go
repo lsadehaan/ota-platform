@@ -2,8 +2,6 @@ package redis
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -17,37 +15,27 @@ import (
 	"go.uber.org/zap"
 )
 
-func encryptData(plaintext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
+func (c *Client) encryptData(plaintext []byte) ([]byte, error) {
+	if c.aead == nil {
+		return plaintext, nil
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
+	nonce := make([]byte, c.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, err
 	}
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	return c.aead.Seal(nonce, nonce, plaintext, nil), nil
 }
 
-func decryptData(ciphertext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
+func (c *Client) decryptData(ciphertext []byte) ([]byte, error) {
+	if c.aead == nil {
+		return ciphertext, nil
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonceSize := gcm.NonceSize()
+	nonceSize := c.aead.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	return gcm.Open(nil, nonce, ciphertext, nil)
+	return c.aead.Open(nil, nonce, ciphertext, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +53,7 @@ type CardState struct {
 }
 
 func cardStateKey(cardID string) string {
-	return fmt.Sprintf("card:%s:state", cardID)
+	return "card:" + cardID + ":state"
 }
 
 // GetCardState retrieves the card state hash from Redis.
@@ -151,7 +139,7 @@ type cardKeysJSON struct {
 }
 
 func cardKeysKey(cardID string) string {
-	return fmt.Sprintf("card:%s:keys", cardID)
+	return "card:" + cardID + ":keys"
 }
 
 // CacheCardKeys stores the card keys as a JSON string with a 1-hour TTL.
@@ -169,8 +157,8 @@ func (c *Client) CacheCardKeys(ctx context.Context, cardID string, keys *CardKey
 		return fmt.Errorf("marshal card keys: %w", err)
 	}
 
-	if c.encryptionKey != nil {
-		data, err = encryptData(data, c.encryptionKey)
+	if c.aead != nil {
+		data, err = c.encryptData(data)
 		if err != nil {
 			return fmt.Errorf("encrypt card keys: %w", err)
 		}
@@ -204,8 +192,8 @@ func (c *Client) GetCardKeys(ctx context.Context, cardID string) (*CardKeys, err
 		return nil, err
 	}
 
-	if c.encryptionKey != nil {
-		data, err = decryptData(data, c.encryptionKey)
+	if c.aead != nil {
+		data, err = c.decryptData(data)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt card keys: %w", err)
 		}
@@ -291,7 +279,7 @@ type campaignCommandJSON struct {
 }
 
 func campaignCommandsKey(campaignID string) string {
-	return fmt.Sprintf("campaign:%s:commands", campaignID)
+	return "campaign:" + campaignID + ":commands"
 }
 
 // CacheCampaignCommands stores the campaign commands as a JSON array with a 12-hour TTL.
@@ -398,11 +386,11 @@ type CampaignProgress struct {
 }
 
 func campaignStatusKey(campaignID string) string {
-	return fmt.Sprintf("campaign:%s:status", campaignID)
+	return "campaign:" + campaignID + ":status"
 }
 
 func campaignProgressKey(campaignID string) string {
-	return fmt.Sprintf("campaign:%s:progress", campaignID)
+	return "campaign:" + campaignID + ":progress"
 }
 
 // SetCampaignStatus stores the campaign status string with a 24-hour TTL.
@@ -506,7 +494,7 @@ func parseProgress(m map[string]string) *CampaignProgress {
 // IncrCounter atomically increments the counter for a given card and application.
 // Counters are permanent and monotonic (no TTL).
 func (c *Client) IncrCounter(ctx context.Context, cardID, appID string) (int64, error) {
-	key := fmt.Sprintf("counter:%s:%s", cardID, appID)
+	key := "counter:" + cardID + ":" + appID
 	val, err := c.rdb.Incr(ctx, key).Result()
 	if err != nil {
 		c.logger.Warn("redis: failed to increment counter",
@@ -526,13 +514,13 @@ func (c *Client) IncrCounter(ctx context.Context, cardID, appID string) (int64, 
 // StoreMSISDNMapping stores a persistent MSISDN→card_id mapping with a 24-hour TTL.
 // This is set when card keys are cached, since the MSISDN is known at that point.
 func (c *Client) StoreMSISDNMapping(ctx context.Context, msisdn, cardID string) error {
-	key := fmt.Sprintf("msisdn:%s", msisdn)
+	key := "msisdn:" + msisdn
 	return c.rdb.Set(ctx, key, cardID, 24*time.Hour).Err()
 }
 
 // LookupCardByMSISDN resolves a card_id from an MSISDN using the persistent mapping.
 func (c *Client) LookupCardByMSISDN(ctx context.Context, msisdn string) (string, error) {
-	key := fmt.Sprintf("msisdn:%s", msisdn)
+	key := "msisdn:" + msisdn
 	return c.rdb.Get(ctx, key).Result()
 }
 
@@ -542,7 +530,7 @@ func (c *Client) LookupCardByMSISDN(ctx context.Context, msisdn string) (string,
 
 // InitMultipartTracking initializes tracking for a multipart SMS message.
 func (c *Client) InitMultipartTracking(ctx context.Context, msgID string, totalParts int) error {
-	key := fmt.Sprintf("multipart:%s", msgID)
+	key := "multipart:" + msgID
 	pipe := c.rdb.Pipeline()
 	pipe.HSet(ctx, key, "total", totalParts, "delivered", 0, "failed", 0)
 	pipe.Expire(ctx, key, 10*time.Minute)
@@ -553,7 +541,7 @@ func (c *Client) InitMultipartTracking(ctx context.Context, msgID string, totalP
 // RecordPartDLR records a DLR for one part of a multipart SMS and returns
 // whether all parts have been resolved and whether any part failed.
 func (c *Client) RecordPartDLR(ctx context.Context, msgID string, delivered bool) (allResolved bool, anyFailed bool, err error) {
-	key := fmt.Sprintf("multipart:%s", msgID)
+	key := "multipart:" + msgID
 
 	// Check if multipart tracking exists first.
 	exists, err := c.rdb.Exists(ctx, key).Result()
@@ -600,7 +588,7 @@ type SMPPMapping struct {
 }
 
 func smppKey(smppMsgID string) string {
-	return fmt.Sprintf("smpp:%s", smppMsgID)
+	return "smpp:" + smppMsgID
 }
 
 // StoreSMPPCorrelation stores an SMPP correlation mapping with a 5-minute TTL.
@@ -658,7 +646,7 @@ func (c *Client) LoadSMPPCorrelation(ctx context.Context, smppMsgID string) (*SM
 // Returns true if the key was newly set (event is NOT a duplicate).
 // Returns false if the key already existed (event IS a duplicate).
 func (c *Client) CheckAndSetDedupe(ctx context.Context, eventID string) (bool, error) {
-	key := fmt.Sprintf("dedupe:%s", eventID)
+	key := "dedupe:" + eventID
 	ok, err := c.rdb.SetNX(ctx, key, 1, 10*time.Minute).Result()
 	if err != nil {
 		c.logger.Warn("redis: failed to check dedupe", zap.String("event_id", eventID), zap.Error(err))
@@ -676,7 +664,7 @@ func (c *Client) CheckAndSetDedupe(ctx context.Context, eventID string) (bool, e
 // ---------------------------------------------------------------------------
 
 func profileCacheKey(profileID string) string {
-	return fmt.Sprintf("profile:%s", profileID)
+	return "profile:" + profileID
 }
 
 // CacheProfile stores a profile as JSON with a 1-hour TTL.
@@ -714,7 +702,7 @@ type CampaignParams struct {
 }
 
 func campaignParamsKey(campaignID string) string {
-	return fmt.Sprintf("campaign_params:%s", campaignID)
+	return "campaign_params:" + campaignID
 }
 
 // CacheCampaignParams stores campaign parameters with a 1-hour TTL.
@@ -749,7 +737,7 @@ func (c *Client) GetCachedCampaignParams(ctx context.Context, campaignID string)
 // Returns true if the request is allowed, false if the rate is exceeded.
 func (c *Client) AcquireThrottle(ctx context.Context, campaignID string, ratePerSec int) (bool, error) {
 	now := time.Now().Unix()
-	key := fmt.Sprintf("throttle:%s:%d", campaignID, now)
+	key := "throttle:" + campaignID + ":" + strconv.FormatInt(now, 10)
 
 	pipe := c.rdb.Pipeline()
 	incrCmd := pipe.Incr(ctx, key)

@@ -183,12 +183,46 @@ func (s *QueryStore) CampaignStats(ctx context.Context, campaignID uuid.UUID) (C
 
 func (s *QueryStore) CampaignStatsBatch(ctx context.Context, campaignIDs []uuid.UUID) (map[uuid.UUID]CampaignStats, error) {
 	out := make(map[uuid.UUID]CampaignStats, len(campaignIDs))
+	if len(campaignIDs) == 0 {
+		return out, nil
+	}
+
+	sem := make(chan struct{}, 8)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	var firstErr error
+
 	for _, id := range campaignIDs {
-		stats, err := s.CampaignStats(ctx, id)
-		if err != nil {
-			return nil, err
-		}
-		out[id] = stats
+		wg.Add(1)
+		go func(campaignID uuid.UUID) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = ctx.Err()
+				}
+				mu.Unlock()
+				return
+			}
+			defer func() { <-sem }()
+
+			stats, err := s.CampaignStats(ctx, campaignID)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				return
+			}
+			out[campaignID] = stats
+		}(id)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return out, nil
 }
@@ -295,14 +329,32 @@ func (s *QueryStore) ResetFailedCards(ctx context.Context, campaignID uuid.UUID,
 func (s *QueryStore) AbortCampaign(ctx context.Context, campaignID uuid.UUID, updatedAt time.Time) (int, error) {
 	skipped := 0
 	batch := s.client.Session().NewBatch(gocql.UnloggedBatch).WithContext(ctx)
+	type counterUpdate struct {
+		campaignBucket int
+		fromColumn     string
+	}
+	counterUpdates := make([]counterUpdate, 0, 128)
 	flushBatch := func() error {
 		if len(batch.Entries) == 0 {
-			return nil
+			if len(counterUpdates) == 0 {
+				return nil
+			}
+		} else {
+			if err := s.client.Session().ExecuteBatch(batch); err != nil {
+				return err
+			}
+			batch = s.client.Session().NewBatch(gocql.UnloggedBatch).WithContext(ctx)
 		}
-		if err := s.client.Session().ExecuteBatch(batch); err != nil {
-			return err
+		for _, update := range counterUpdates {
+			if err := s.client.Session().Query(
+				fmt.Sprintf(`UPDATE campaign_progress_by_bucket SET %s = %s + ?, skipped = skipped + ? WHERE campaign_id = ? AND campaign_bucket = ?`,
+					update.fromColumn, update.fromColumn),
+				int64(-1), int64(1), toGocqlUUID(campaignID), update.campaignBucket,
+			).WithContext(ctx).Exec(); err != nil {
+				return err
+			}
 		}
-		batch = s.client.Session().NewBatch(gocql.UnloggedBatch).WithContext(ctx)
+		counterUpdates = counterUpdates[:0]
 		return nil
 	}
 	for bucket := 0; bucket < s.client.BucketCount(); bucket++ {
@@ -354,14 +406,14 @@ func (s *QueryStore) AbortCampaign(ctx context.Context, campaignID uuid.UUID, up
 				toGocqlUUID(campaignID), campaignBucket, cardID,
 			)
 
-			if counterColumn(status) != counterColumn("skipped") {
-				batch.Query(
-					fmt.Sprintf(`UPDATE campaign_progress_by_bucket SET %s = %s + ?, skipped = skipped + ? WHERE campaign_id = ? AND campaign_bucket = ?`,
-						counterColumn(status), counterColumn(status)),
-					int64(-1), int64(1), toGocqlUUID(campaignID), campaignBucket,
-				)
+			fromColumn := counterColumn(status)
+			if fromColumn != counterColumn("skipped") {
+				counterUpdates = append(counterUpdates, counterUpdate{
+					campaignBucket: campaignBucket,
+					fromColumn:     fromColumn,
+				})
 			}
-			if len(batch.Entries) >= 200 {
+			if len(batch.Entries) >= 200 || len(counterUpdates) >= 200 {
 				if err := flushBatch(); err != nil {
 					return skipped, err
 				}

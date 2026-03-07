@@ -392,15 +392,16 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			}
 		}
 
-		// Create campaign targets
+		// Create campaign targets in batches to avoid large per-row ORM overhead.
+		targets := make([]db.CampaignTarget, 0, len(uniqueCardIDs))
 		for _, cardID := range uniqueCardIDs {
-			target := db.CampaignTarget{
+			targets = append(targets, db.CampaignTarget{
 				CampaignID: campaign.ID,
 				CardID:     cardID,
-			}
-			if err := tx.Create(&target).Error; err != nil {
-				return err
-			}
+			})
+		}
+		if err := tx.CreateInBatches(targets, 500).Error; err != nil {
+			return err
 		}
 
 		return nil

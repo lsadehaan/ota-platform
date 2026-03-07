@@ -34,6 +34,10 @@ type Publisher interface {
 	Publish(ctx context.Context, key string, message interface{}) error
 }
 
+type BatchPublisher interface {
+	PublishBatch(ctx context.Context, items []kafkapkg.BatchItem) error
+}
+
 func NewService(database *gorm.DB, publisher Publisher, logger *zap.Logger) *Service {
 	meter := otel.Meter("campaign-planner")
 	shardsClaimed, err := meter.Int64Counter("ota.planner.shards_claimed", metric.WithDescription("Planner shards claimed"))
@@ -136,6 +140,30 @@ func (s *Service) publishClaimedShards(ctx context.Context, shards []db.Campaign
 			)
 			pendingResetIDs = append(pendingResetIDs, shard.ID)
 			break
+		}
+
+		if batchPublisher, ok := s.publisher.(BatchPublisher); ok {
+			items := make([]kafkapkg.BatchItem, 0, len(events))
+			for _, event := range events {
+				items = append(items, kafkapkg.BatchItem{
+					Key:   event.CardID,
+					Value: event,
+				})
+			}
+			if err := batchPublisher.PublishBatch(ctx, items); err != nil {
+				s.logger.Error("failed to publish shard batch",
+					zap.String("shard_id", shard.ID.String()),
+					zap.Int("shard_size", len(events)),
+					zap.Error(err),
+				)
+				pendingResetIDs = append(pendingResetIDs, shard.ID)
+				for _, remaining := range shards[idx+1:] {
+					pendingResetIDs = append(pendingResetIDs, remaining.ID)
+				}
+				break
+			}
+			publishedIDs = append(publishedIDs, shard.ID)
+			continue
 		}
 
 		ok := true

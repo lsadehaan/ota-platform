@@ -7,6 +7,8 @@ import (
 	"fmt"
 )
 
+var zeroIV16 [16]byte
+
 // BuildCommandPacket constructs a complete GSM 03.48 command packet from the
 // given input using the security profile's parameters.
 func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte, error) {
@@ -27,8 +29,7 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 		blockSize := sp.cipherBlockSize()
 		paddedData, pcntr = padData(input.UserData, blockSize)
 	} else {
-		paddedData = make([]byte, len(input.UserData))
-		copy(paddedData, input.UserData)
+		paddedData = input.UserData
 		pcntr = 0
 	}
 
@@ -108,8 +109,8 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 // Bits 1-2: certification mode, bit 3: ciphered, bits 4-5: counter mode.
 func (sp *SecurityProfile) encodeSPI1() byte {
 	var b byte
-	b |= byte(sp.CertMode) & 0x03        // bits 0-1
-	if sp.Ciphered {                      // bit 2
+	b |= byte(sp.CertMode) & 0x03 // bits 0-1
+	if sp.Ciphered {              // bit 2
 		b |= 0x04
 	}
 	b |= (byte(sp.CounterMode) & 0x03) << 3 // bits 3-4
@@ -121,9 +122,9 @@ func (sp *SecurityProfile) encodeSPI1() byte {
 // bits 6-7: PoR protocol.
 func (sp *SecurityProfile) encodeSPI2() byte {
 	var b byte
-	b |= byte(sp.PoRMode) & 0x03             // bits 0-1
-	b |= (byte(sp.PoRCertMode) & 0x03) << 2  // bits 2-3
-	if sp.PoRCiphered {                       // bit 4
+	b |= byte(sp.PoRMode) & 0x03            // bits 0-1
+	b |= (byte(sp.PoRCertMode) & 0x03) << 2 // bits 2-3
+	if sp.PoRCiphered {                     // bit 4
 		b |= 0x10
 	}
 	b |= (sp.PoRProtocol & 0x03) << 5 // bits 5-6
@@ -186,9 +187,7 @@ func padData(data []byte, blockSize int) ([]byte, byte) {
 	}
 	remainder := len(data) % blockSize
 	if remainder == 0 {
-		out := make([]byte, len(data))
-		copy(out, data)
-		return out, 0
+		return data, 0
 	}
 	padLen := blockSize - remainder
 	padded := make([]byte, len(data)+padLen)
@@ -205,14 +204,13 @@ func padData(data []byte, blockSize int) ([]byte, byte) {
 //
 // Returns an 8-byte MAC.
 func computeMAC(mode CipherMode, key []byte, header, data []byte) ([]byte, error) {
-	// Combine header and data for MAC computation.
-	macInput := append(header, data...)
-
-	// Pad to 8-byte boundary if needed.
-	if len(macInput)%8 != 0 {
-		padLen := 8 - (len(macInput) % 8)
-		macInput = append(macInput, make([]byte, padLen)...)
+	totalLen := len(header) + len(data)
+	if rem := totalLen % 8; rem != 0 {
+		totalLen += 8 - rem
 	}
+	macInput := make([]byte, totalLen)
+	copy(macInput, header)
+	copy(macInput[len(header):], data)
 
 	switch mode {
 	case CipherDES_CBC:
@@ -357,8 +355,7 @@ func encryptData(mode CipherMode, key []byte, counter []byte, data []byte) ([]by
 	}
 
 	// IV is all zeros.
-	iv := make([]byte, blockSize)
-	cbc := cipher.NewCBCEncrypter(block, iv)
+	cbc := cipher.NewCBCEncrypter(block, zeroIV16[:blockSize])
 
 	encrypted := make([]byte, len(data))
 	cbc.CryptBlocks(encrypted, data)
@@ -368,10 +365,13 @@ func encryptData(mode CipherMode, key []byte, counter []byte, data []byte) ([]by
 // computeCRC computes a simple CRC (XOR-based redundancy check) over
 // the header and data, returning a slice of the requested length.
 func computeCRC(header, data []byte, length int) []byte {
-	combined := append(header, data...)
 	crc := make([]byte, length)
-	for i, b := range combined {
+	for i, b := range header {
 		crc[i%length] ^= b
+	}
+	offset := len(header)
+	for i, b := range data {
+		crc[(offset+i)%length] ^= b
 	}
 	return crc
 }

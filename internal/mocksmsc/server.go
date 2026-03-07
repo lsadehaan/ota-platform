@@ -31,7 +31,7 @@ type Config struct {
 type Server struct {
 	config      Config
 	listener    net.Listener
-	clients     map[net.Conn]bool
+	clients     map[net.Conn]*sync.Mutex
 	reassembler *smsframe.Reassembler
 	store       *MessageStore
 	mu          sync.Mutex
@@ -53,7 +53,7 @@ func NewServer(config Config, logger *zap.Logger) *Server {
 	}
 	return &Server{
 		config:      config,
-		clients:     make(map[net.Conn]bool),
+		clients:     make(map[net.Conn]*sync.Mutex),
 		reassembler: smsframe.NewReassembler(),
 		store:       NewMessageStore(),
 		logger:      logger,
@@ -88,7 +88,7 @@ func (s *Server) Stop() {
 	for conn := range s.clients {
 		conn.Close()
 	}
-	s.clients = make(map[net.Conn]bool)
+	s.clients = make(map[net.Conn]*sync.Mutex)
 	s.mu.Unlock()
 
 	s.logger.Info("mock SMSC server stopped")
@@ -109,7 +109,7 @@ func (s *Server) acceptLoop() {
 		}
 
 		s.mu.Lock()
-		s.clients[conn] = true
+		s.clients[conn] = &sync.Mutex{}
 		s.mu.Unlock()
 
 		s.logger.Info("new SMPP client connected",
@@ -290,6 +290,12 @@ func (s *Server) handleConnection(conn net.Conn) {
 			}
 			s.logger.Debug("enquire_link_resp sent")
 
+		case smpp.CmdDeliverSMResp:
+			// The client acknowledges previously delivered DLR/MO PDUs with
+			// deliver_sm_resp. This is expected protocol traffic and requires no
+			// further action from the mock SMSC.
+			s.logger.Debug("deliver_sm_resp received", zap.Uint32("sequence", pdu.SequenceNumber))
+
 		case smpp.CmdUnbind:
 			resp := &smpp.PDU{
 				CommandID:      smpp.CmdUnbindResp,
@@ -469,6 +475,16 @@ func (s *Server) buildDeliverSMBody(sourceAddr string, destAddr string, esmClass
 // writePDU encodes and writes a PDU to the given connection.
 func (s *Server) writePDU(conn net.Conn, pdu *smpp.PDU) error {
 	data := smpp.EncodePDU(pdu)
+
+	s.mu.Lock()
+	connMu, ok := s.clients[conn]
+	s.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("connection not registered for write")
+	}
+
+	connMu.Lock()
+	defer connMu.Unlock()
 	_, err := conn.Write(data)
 	return err
 }

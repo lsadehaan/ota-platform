@@ -213,15 +213,6 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 			if backoff > time.Second {
 				backoff = time.Second
 			}
-			timer := time.NewTimer(backoff)
-			select {
-			case <-ctx.Done():
-				timer.Stop()
-				return ctx.Err()
-			case <-timer.C:
-			}
-
-			// Re-publish the same event after a bounded backoff.
 			retryEvent := kafkapkg.CardEvent{
 				Type:       "card.activate",
 				EventID:    uuid.New().String(),
@@ -232,7 +223,8 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 				Timestamp:  time.Now(),
 			}
 			w.telemetry.recordRetry(ctx, "throttle")
-			return w.eventProducer.Publish(ctx, event.CardID, retryEvent)
+			w.scheduleActivateRetry(ctx, retryEvent, backoff, "throttle")
+			return nil
 		}
 	}
 
@@ -560,6 +552,30 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 	}
 
 	return nil
+}
+
+func (w *CardWorker) scheduleActivateRetry(ctx context.Context, event kafkapkg.CardEvent, delay time.Duration, reason string) {
+	go func() {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
+		publishCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := w.eventProducer.Publish(publishCtx, event.CardID, event); err != nil {
+			w.logger.Warn("failed to publish delayed activate retry",
+				zap.String("card_id", event.CardID),
+				zap.String("campaign_id", event.CampaignID),
+				zap.String("reason", reason),
+				zap.Error(err),
+			)
+		}
+	}()
 }
 
 // handleMO processes a mobile-originated response (PoR from SIM).

@@ -56,7 +56,7 @@ var upgrader = websocket.Upgrader{
 		}
 		allowed := os.Getenv("ALLOWED_ORIGINS")
 		if allowed == "" {
-			allowed = "http://localhost:3000"
+			allowed = "http://localhost:3001"
 		}
 		for _, o := range strings.Split(allowed, ",") {
 			if strings.TrimSpace(o) == origin {
