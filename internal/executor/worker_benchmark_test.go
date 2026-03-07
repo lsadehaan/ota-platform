@@ -126,7 +126,7 @@ func BenchmarkHandleActivate(b *testing.B) {
 		},
 	}
 
-	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, nil, zap.NewNop())
+	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, nil, nil, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, nil, zap.NewNop())
 	payload, err := json.Marshal(kafkapkg.CardEvent{
 		Type:       "card.activate",
 		EventID:    "evt-1",

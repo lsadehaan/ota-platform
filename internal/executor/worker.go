@@ -17,6 +17,7 @@ import (
 
 	"ota-platform/internal/db"
 	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
 	"ota-platform/pkg/gsm0348"
 	"ota-platform/pkg/hexutil"
@@ -26,29 +27,33 @@ import (
 // CardWorker processes card events from Kafka using the coordination store for
 // hot state and PostgreSQL for durable state.
 type CardWorker struct {
-	db            *gorm.DB
-	execution     ExecutionStore
-	redis         CoordinationStore
-	smsProducer   Producer // publishes to send-sms topic
-	logProducer   Producer // publishes to message-log topic
-	eventProducer Producer // publishes to card-events topic (for self-triggering next steps)
-	wsHub         WSHub
-	logger        *zap.Logger
-	telemetry     *executorTelemetry
+	db             *gorm.DB
+	execution      ExecutionStore
+	redis          CoordinationStore
+	keyStore       keystore.KeyStore
+	cryptoProvider keystore.CryptoProvider // nil when using software crypto
+	smsProducer    Producer                // publishes to send-sms topic
+	logProducer    Producer                // publishes to message-log topic
+	eventProducer  Producer                // publishes to card-events topic (for self-triggering next steps)
+	wsHub          WSHub
+	logger         *zap.Logger
+	telemetry      *executorTelemetry
 }
 
 // NewCardWorker creates a new CardWorker.
-func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb CoordinationStore, smsProducer, logProducer, eventProducer Producer, wsHub WSHub, logger *zap.Logger) *CardWorker {
+func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, wsHub WSHub, logger *zap.Logger) *CardWorker {
 	return &CardWorker{
-		db:            database,
-		execution:     executionStore,
-		redis:         rdb,
-		smsProducer:   smsProducer,
-		logProducer:   logProducer,
-		eventProducer: eventProducer,
-		wsHub:         wsHub,
-		logger:        logger,
-		telemetry:     newExecutorTelemetry(logger),
+		db:             database,
+		execution:      executionStore,
+		redis:          rdb,
+		keyStore:       ks,
+		cryptoProvider: cp,
+		smsProducer:    smsProducer,
+		logProducer:    logProducer,
+		eventProducer:  eventProducer,
+		wsHub:          wsHub,
+		logger:         logger,
+		telemetry:      newExecutorTelemetry(logger),
 	}
 }
 

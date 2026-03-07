@@ -290,7 +290,7 @@ func BenchmarkActivationPipeline(b *testing.B) {
 		smsProducer := &pipelineProducer{}
 		logProducer := &pipelineProducer{}
 		eventProducer := &pipelineProducer{}
-		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
+		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, nil, nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
 		plannerSvc := NewService(database, &executorBridgePublisher{worker: worker, ctx: context.Background()}, zap.NewNop())
 		projectorStore := &pipelineProjectorStore{}
 		gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, &pipelineProducer{}, coordination, zap.NewNop())
@@ -326,7 +326,7 @@ func BenchmarkActivationResponsePipeline(b *testing.B) {
 	smsProducer := &pipelineProducer{}
 	logProducer := &pipelineProducer{}
 	eventProducer := &pipelineProducer{}
-	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
+	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, nil, nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
 	bridge := &executorBridgePublisher{worker: worker, ctx: context.Background()}
 	gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, bridge, coordination, zap.NewNop())
 

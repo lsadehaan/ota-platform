@@ -5,6 +5,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
 )
 
@@ -52,6 +53,6 @@ type Producer interface {
 type Service = CardWorker
 
 // NewService constructs the executor service.
-func NewService(database *gorm.DB, executionStore ExecutionStore, store CoordinationStore, smsProducer, logProducer, eventProducer Producer, wsHub WSHub, logger *zap.Logger) *Service {
-	return NewCardWorker(database, executionStore, store, smsProducer, logProducer, eventProducer, wsHub, logger)
+func NewService(database *gorm.DB, executionStore ExecutionStore, store CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, wsHub WSHub, logger *zap.Logger) *Service {
+	return NewCardWorker(database, executionStore, store, ks, cp, smsProducer, logProducer, eventProducer, wsHub, logger)
 }

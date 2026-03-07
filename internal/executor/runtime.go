@@ -8,8 +8,10 @@ import (
 	"go.uber.org/zap"
 
 	"ota-platform/internal/bootstrap"
+	"ota-platform/internal/config"
 	contractevents "ota-platform/internal/contracts/events"
 	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/keystore"
 	"ota-platform/internal/observability"
 	scyllastore "ota-platform/internal/scylla"
 )
@@ -43,8 +45,19 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	eventProducer := kafkapkg.NewProducer(kafkaBrokers, contractevents.TopicCardEvents, logger.Named("event-producer"))
 	defer eventProducer.Close()
 
+	// Build keystore.
+	keyCfg := keystore.Config{
+		Backend:      config.GetEnv("KEYSTORE_BACKEND", "software"),
+		CacheEnabled: true,
+	}
+	redisCache := keystore.NewRedisKeyCache(rdb)
+	ks, cp, err := keystore.Build(keyCfg, database, redisCache, logger.Named("keystore"))
+	if err != nil {
+		return fmt.Errorf("build keystore: %w", err)
+	}
+
 	executionStore := scyllastore.NewExecutionStore(scylla, database)
-	cardWorker := NewService(database, executionStore, rdb, smsProducer, logProducer, eventProducer, nil, logger.Named("card-worker"))
+	cardWorker := NewService(database, executionStore, rdb, ks, cp, smsProducer, logProducer, eventProducer, nil, logger.Named("card-worker"))
 	consumerMgr := NewConsumerManager(kafkaBrokers, cardWorker, logger.Named("consumer"))
 	defer consumerMgr.Close()
 
