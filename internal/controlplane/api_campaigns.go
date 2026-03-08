@@ -30,6 +30,39 @@ var allowedCampaignTypes = map[string]struct{}{
 	"custom_apdu":    {},
 }
 
+func buildProfileTargetInsertSQL(campaignID uuid.UUID, profileIDs []uuid.UUID) (string, []interface{}) {
+	args := make([]interface{}, 0, len(profileIDs)+1)
+	args = append(args, campaignID)
+	if len(profileIDs) == 1 {
+		args = append(args, profileIDs[0])
+		return `
+			INSERT INTO campaign_targets (campaign_id, card_id, created_at)
+			SELECT ?, id, NOW()
+			FROM cards
+			WHERE profile_id = ? AND status = 'active'
+			ON CONFLICT DO NOTHING
+		`, args
+	}
+
+	var b strings.Builder
+	b.WriteString(`
+		INSERT INTO campaign_targets (campaign_id, card_id, created_at)
+		SELECT ?, id, NOW()
+		FROM cards
+		WHERE profile_id IN (`)
+	for i, profileID := range profileIDs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("?")
+		args = append(args, profileID)
+	}
+	b.WriteString(`) AND status = 'active'
+		ON CONFLICT DO NOTHING
+	`)
+	return b.String(), args
+}
+
 // CreateCampaignRequest is the request body for POST /api/v1/campaigns.
 type CreateCampaignRequest struct {
 	Name              string           `json:"name" binding:"required"`
@@ -37,6 +70,7 @@ type CreateCampaignRequest struct {
 	Type              string           `json:"type"`
 	CardIDs           []string         `json:"card_ids"`
 	ProfileID         string           `json:"profile_id"`
+	ProfileIDs        []string         `json:"profile_ids"`
 	CardGroupID       string           `json:"card_group_id"`
 	CAPFileID         string           `json:"cap_file_id"`
 	ScriptID          string           `json:"script_id"`
@@ -291,14 +325,34 @@ func (a *API) CreateCampaign(c *gin.Context) {
 		explicitCardIDs = append(explicitCardIDs, id)
 	}
 
-	var profileID *uuid.UUID
+	var profileIDs []uuid.UUID
 	if req.ProfileID != "" {
 		parsed, err := uuid.Parse(req.ProfileID)
 		if err != nil {
 			errorResponse(c, http.StatusBadRequest, "invalid profile_id")
 			return
 		}
-		profileID = &parsed
+		profileIDs = append(profileIDs, parsed)
+	}
+	for _, profileIDStr := range req.ProfileIDs {
+		parsed, err := uuid.Parse(profileIDStr)
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "invalid profile_id in profile_ids")
+			return
+		}
+		profileIDs = append(profileIDs, parsed)
+	}
+	if len(profileIDs) > 1 {
+		seenProfiles := make(map[uuid.UUID]struct{}, len(profileIDs))
+		deduped := make([]uuid.UUID, 0, len(profileIDs))
+		for _, profileID := range profileIDs {
+			if _, ok := seenProfiles[profileID]; ok {
+				continue
+			}
+			seenProfiles[profileID] = struct{}{}
+			deduped = append(deduped, profileID)
+		}
+		profileIDs = deduped
 	}
 
 	var groupID *uuid.UUID
@@ -321,13 +375,12 @@ func (a *API) CreateCampaign(c *gin.Context) {
 		}
 	}
 
-	if len(uniqueCardIDs) == 0 && profileID == nil && groupID == nil {
+	if len(uniqueCardIDs) == 0 && len(profileIDs) == 0 && groupID == nil {
 		errorResponse(c, http.StatusBadRequest, "no target cards specified")
 		return
 	}
 
 	// For wizard campaigns, validate the application exists.
-	var applicationProfileID *uuid.UUID
 	if req.ApplicationID != "" {
 		appID, err := uuid.Parse(req.ApplicationID)
 		if err != nil {
@@ -335,18 +388,13 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			return
 		}
 		var app db.Application
-		if err := a.db.Select("profile_id").First(&app, "id = ?", appID).Error; err != nil {
+		if err := a.db.Select("id").First(&app, "id = ?", appID).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				errorResponse(c, http.StatusBadRequest, "application not found")
 				return
 			}
 			a.logger.Error("failed to fetch application for profile validation", zap.Error(err))
 			errorResponse(c, http.StatusInternalServerError, "failed to validate application profile")
-			return
-		}
-		applicationProfileID = &app.ProfileID
-		if profileID != nil && *profileID != app.ProfileID {
-			errorResponse(c, http.StatusBadRequest, "profile_id does not match the application's profile")
 			return
 		}
 	}
@@ -394,14 +442,9 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			}
 		}
 
-		if profileID != nil {
-			if err := tx.Exec(`
-				INSERT INTO campaign_targets (campaign_id, card_id, created_at)
-				SELECT ?, id, NOW()
-				FROM cards
-				WHERE profile_id = ? AND status = 'active'
-				ON CONFLICT DO NOTHING
-			`, campaign.ID, *profileID).Error; err != nil {
+		if len(profileIDs) > 0 {
+			sql, args := buildProfileTargetInsertSQL(campaign.ID, profileIDs)
+			if err := tx.Exec(sql, args...).Error; err != nil {
 				return err
 			}
 		}
@@ -416,19 +459,6 @@ func (a *API) CreateCampaign(c *gin.Context) {
 				ON CONFLICT DO NOTHING
 			`, campaign.ID, *groupID).Error; err != nil {
 				return err
-			}
-		}
-
-		if applicationProfileID != nil {
-			var mismatchCount int64
-			if err := tx.Table("campaign_targets ct").
-				Joins("JOIN cards c ON c.id = ct.card_id").
-				Where("ct.campaign_id = ? AND c.profile_id <> ?", campaign.ID, *applicationProfileID).
-				Count(&mismatchCount).Error; err != nil {
-				return err
-			}
-			if mismatchCount > 0 {
-				return fmt.Errorf("%d cards do not belong to the application's profile", mismatchCount)
 			}
 		}
 
