@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -21,7 +20,6 @@ import (
 	kafkapkg "ota-platform/internal/kafka"
 	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
-	scyllastore "ota-platform/internal/scylla"
 	"ota-platform/pkg/gsm0348"
 	"ota-platform/pkg/hexutil"
 	"ota-platform/pkg/smsframe"
@@ -44,8 +42,7 @@ type CardWorker struct {
 	cardKeyCache   *ttlCache[*keystore.CardKeyMaterial]
 	profileCache   *ttlCache[*db.Profile]
 	campaignCache  *ttlCache[*campaignExecutionContext]
-	retryWg           sync.WaitGroup
-	completionCounter atomic.Int64
+	retryWg sync.WaitGroup
 }
 
 type campaignExecutionContext struct {
@@ -467,7 +464,7 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 		)
 		w.telemetry.recordCardProcessed(ctx, "failed_partial_submit")
 
-		w.checkCampaignComplete(ctx, event.CampaignID)
+		// Campaign completion is detected by the reconciler (1-minute poll).
 	case "FAILED_SUBMIT", "FAILED", "UNDELIV", "EXPIRED", "DELETED", "REJECTD":
 		// Get max retries from campaign.
 		campaignCtx, err := w.loadCampaignContext(ctx, event.CampaignID)
@@ -545,7 +542,7 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 		w.telemetry.recordCardProcessed(ctx, "failed_dlr")
 
 		// Check if campaign is now complete.
-		w.checkCampaignComplete(ctx, event.CampaignID)
+		// Campaign completion is detected by the reconciler (1-minute poll).
 	}
 
 	return nil
@@ -744,7 +741,7 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 	)
 	w.telemetry.recordCardProcessed(ctx, "failed_por")
 
-	w.checkCampaignComplete(ctx, event.CampaignID)
+	// Campaign completion is detected by the reconciler (1-minute poll).
 	return nil
 }
 
@@ -790,7 +787,7 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 		w.telemetry.recordCardProcessed(ctx, "completed")
 
 		// Check if campaign is complete.
-		w.checkCampaignComplete(ctx, event.CampaignID)
+		// Campaign completion is detected by the reconciler (1-minute poll).
 		return nil
 	}
 
@@ -807,100 +804,9 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 }
 
 // completionCheckInterval controls how often we query campaign stats to detect
-// completion. Checking every card is wasteful at scale — we sample every Nth
-// terminal event instead. The exact value is a heuristic; the reconciler
-// catches any campaigns missed by sampling.
-const completionCheckInterval = 50
-
-// checkCampaignComplete checks if all cards are done and updates campaign status.
-// To avoid an expensive ScyllaDB read on every terminal card event, only checks
-// every completionCheckInterval-th event. The reconciler catches any stragglers.
-func (w *CardWorker) checkCampaignComplete(ctx context.Context, campaignID string) {
-	if w.execution == nil {
-		return
-	}
-
-	n := w.completionCounter.Add(1)
-	if n%completionCheckInterval != 0 {
-		return
-	}
-
-	stats, err := w.execution.CampaignStats(ctx, campaignID)
-	if err != nil {
-		w.logger.Warn("failed to load campaign stats for completion check",
-			zap.String("campaign_id", campaignID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	terminal := stats.Completed + stats.Failed + stats.Skipped
-	if stats.Total == 0 {
-		return
-	}
-	if terminal < stats.Total {
-		return
-	}
-
-	w.completeCampaign(ctx, campaignID, stats)
-}
-
-// completeCampaign determines the final status and persists campaign completion.
-func (w *CardWorker) completeCampaign(ctx context.Context, campaignID string, stats scyllastore.CampaignStats) {
-	// Use a short-lived derived context so completion writes finish
-	// even if parent is near cancellation, but don't hang forever.
-	completeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	var finalStatus string
-	if stats.Failed > 0 && stats.Completed == 0 {
-		finalStatus = "failed"
-	} else if stats.Failed > 0 {
-		finalStatus = "completed_with_errors"
-	} else {
-		finalStatus = "completed"
-	}
-
-	now := time.Now()
-	completed, err := w.execution.CompleteCampaignIfRunning(completeCtx, campaignID, finalStatus, now)
-	if err != nil {
-		w.logger.Warn("failed to update campaign completion",
-			zap.String("campaign_id", campaignID),
-			zap.Error(err),
-		)
-		return
-	}
-	if !completed {
-		return
-	}
-
-	if err := w.redis.SetCampaignStatus(completeCtx, campaignID, finalStatus); err != nil {
-		w.logger.Warn("failed to set campaign status in coordination store",
-			zap.String("campaign_id", campaignID),
-			zap.Error(err),
-		)
-	}
-
-	if w.wsHub != nil {
-		w.wsHub.Broadcast(&WSEvent{
-			Type:       "campaign_progress",
-			CampaignID: campaignID,
-			Data: map[string]interface{}{
-				"status":       finalStatus,
-				"completed_at": now,
-				"completed":    stats.Completed,
-				"failed":       stats.Failed,
-			},
-		})
-	}
-
-	w.logger.Info("campaign completed",
-		zap.String("campaign_id", campaignID),
-		zap.String("final_status", finalStatus),
-		zap.Int64("completed_cards", stats.Completed),
-		zap.Int64("failed_cards", stats.Failed),
-	)
-}
+// NOTE: Campaign completion detection has been moved to the reconciler service,
+// which polls running campaigns every 1 minute. This removes per-card ScyllaDB
+// reads from the hot path, significantly improving MO/DLR throughput.
 
 // loadProfileCached loads a card profile using cache-aside: try Redis first, fall back to DB.
 func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*db.Profile, error) {
