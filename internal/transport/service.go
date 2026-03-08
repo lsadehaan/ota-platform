@@ -43,11 +43,12 @@ func NewServiceWithDeps(smppClient SMPPClient, eventProducer EventProducer, stor
 		logger = zap.NewNop()
 	}
 	return &Gateway{
-		smppPool:      smppClient,
-		eventProducer: eventProducer,
-		redis:         store,
-		logger:        logger,
-		telemetry:     newGatewayTelemetry(logger),
+		smppPool:    smppClient,
+		dlrProducer: eventProducer,
+		moProducer:  eventProducer,
+		redis:       store,
+		logger:      logger,
+		telemetry:   newGatewayTelemetry(logger),
 	}
 }
 

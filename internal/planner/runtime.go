@@ -28,7 +28,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}()
 
 	database := bootstrap.MustGormDB(logger)
-	producer := kafkapkg.NewProducerWithOptions(bootstrap.KafkaBrokers(), contractevents.TopicCardEvents, kafkapkg.ProducerOptions{
+	producer := kafkapkg.NewProducerWithOptions(bootstrap.KafkaBrokers(), contractevents.TopicCardActivate, kafkapkg.ProducerOptions{
 		RequiredAcks:    kafka.RequireAll,
 		RequiredAcksSet: true,
 	}, logger.Named("planner-producer"))

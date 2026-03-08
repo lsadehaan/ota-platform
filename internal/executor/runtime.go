@@ -50,11 +50,11 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}, logger.Named("log-producer"))
 	defer logProducer.Close()
 
-	eventProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicCardEvents, kafkapkg.ProducerOptions{
+	activateProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicCardActivate, kafkapkg.ProducerOptions{
 		RequiredAcks:    kafka.RequireAll,
 		RequiredAcksSet: true,
-	}, logger.Named("event-producer"))
-	defer eventProducer.Close()
+	}, logger.Named("activate-producer"))
+	defer activateProducer.Close()
 
 	// Build keystore.
 	keyCfg := keystore.Config{
@@ -68,7 +68,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	executionStore := scyllastore.NewExecutionStore(scylla, database)
-	cardWorker := NewService(database, executionStore, rdb, ks, cp, smsProducer, logProducer, eventProducer, nil, logger.Named("card-worker"))
+	cardWorker := NewService(database, executionStore, rdb, ks, cp, smsProducer, logProducer, activateProducer, nil, logger.Named("card-worker"))
 	consumerMgr := NewConsumerManager(kafkaBrokers, cardWorker, logger.Named("consumer"))
 	defer consumerMgr.Close()
 
@@ -81,9 +81,11 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	select {
 	case <-ctx.Done():
 		<-consumerDone
+		cardWorker.DrainRetries()
 		logger.Info("card executor shutdown complete")
 		return nil
 	case <-consumerDone:
+		cardWorker.DrainRetries()
 		return nil
 	}
 }

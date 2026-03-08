@@ -2,7 +2,10 @@ package events
 
 const (
 	TopicPlannerEvents   = "planner-events"
-	TopicCardEvents      = "card-events"
+	TopicCardEvents      = "card-events" // Deprecated: use per-type topics below
+	TopicCardActivate    = "card-activate"
+	TopicCardDLR         = "card-dlr"
+	TopicCardMO          = "card-mo"
 	TopicSendSMS         = "send-sms"
 	TopicTransportEvents = "transport-events"
 	TopicExecutionEvents = "execution-events"

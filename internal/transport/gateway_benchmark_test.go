@@ -67,10 +67,11 @@ func BenchmarkHandleSendSMS(b *testing.B) {
 	}
 
 	gateway := &Gateway{
-		smppPool:      &benchmarkSMPPClient{},
-		eventProducer: benchmarkEventProducer{},
-		redis:         benchmarkTransportStore{},
-		logger:        zap.NewNop(),
+		smppPool:    &benchmarkSMPPClient{},
+		dlrProducer: benchmarkEventProducer{},
+		moProducer:  benchmarkEventProducer{},
+		redis:       benchmarkTransportStore{},
+		logger:      zap.NewNop(),
 	}
 
 	b.ReportAllocs()

@@ -23,22 +23,22 @@ import (
 )
 
 const (
-	sendSMSTopic    = contractevents.TopicSendSMS
-	cardEventsTopic = contractevents.TopicCardEvents
-	consumerGroup   = "sms-gateway"
-	correlationTTL  = 5 * time.Minute
+	sendSMSTopic   = contractevents.TopicSendSMS
+	consumerGroup  = "sms-gateway"
+	correlationTTL = 5 * time.Minute
 )
 
 // Gateway consumes from the send-sms Kafka topic, submits SMS messages via SMPP pool,
 // and produces card events back to Kafka for DLR/MO processing.
 type Gateway struct {
-	smppPool      SMPPClient
-	consumer      *kafkapkg.ConcurrentConsumer
-	eventProducer EventProducer // publishes to card-events topic
-	redis         CoordinationStore
-	logger        *zap.Logger
-	telemetry     *gatewayTelemetry
-	correlations  sync.Map
+	smppPool    SMPPClient
+	consumer    *kafkapkg.ConcurrentConsumer
+	dlrProducer EventProducer // publishes to card-dlr topic
+	moProducer  EventProducer // publishes to card-mo topic
+	redis       CoordinationStore
+	logger      *zap.Logger
+	telemetry   *gatewayTelemetry
+	correlations sync.Map
 }
 
 type correlationEntry struct {
@@ -53,11 +53,15 @@ func NewGateway(smppConfig smpp.Config, poolConfig smpp.PoolConfig, kafkaBrokers
 		telemetry: newGatewayTelemetry(logger),
 	}
 
-	// Create Kafka producer for card-events topic
-	s.eventProducer = kafkapkg.NewProducerWithOptions(kafkaBrokers, cardEventsTopic, kafkapkg.ProducerOptions{
+	// Create Kafka producers for DLR and MO topics
+	s.dlrProducer = kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicCardDLR, kafkapkg.ProducerOptions{
 		RequiredAcks:    kafka.RequireAll,
 		RequiredAcksSet: true,
-	}, logger.Named("event-producer"))
+	}, logger.Named("dlr-producer"))
+	s.moProducer = kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicCardMO, kafkapkg.ProducerOptions{
+		RequiredAcks:    kafka.RequireAll,
+		RequiredAcksSet: true,
+	}, logger.Named("mo-producer"))
 
 	// Create SMPP pool with deliver handler
 	handler := func(sourceAddr string, destAddr string, esmClass byte, payload []byte) {
@@ -415,6 +419,15 @@ func (s *Gateway) handleMO(ctx context.Context, sourceAddr, destAddr string, pay
 }
 
 func (s *Gateway) publishCardEvent(ctx context.Context, key string, event kafkapkg.CardEvent, eventLabel string) error {
+	// Route to the correct producer based on event type.
+	var producer EventProducer
+	switch event.Type {
+	case "card.mo_received":
+		producer = s.moProducer
+	default:
+		producer = s.dlrProducer
+	}
+
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -428,7 +441,7 @@ func (s *Gateway) publishCardEvent(ctx context.Context, key string, event kafkap
 			}
 		}
 
-		if err := s.eventProducer.Publish(ctx, key, event); err != nil {
+		if err := producer.Publish(ctx, key, event); err != nil {
 			lastErr = err
 			s.logger.Warn("retrying card event publish",
 				zap.String("event_type", event.Type),
@@ -451,7 +464,10 @@ func (s *Gateway) Close() {
 	if err := s.smppPool.Close(); err != nil {
 		s.logger.Error("close SMPP pool", zap.Error(err))
 	}
-	if err := s.eventProducer.Close(); err != nil {
-		s.logger.Error("close event producer", zap.Error(err))
+	if err := s.dlrProducer.Close(); err != nil {
+		s.logger.Error("close dlr producer", zap.Error(err))
+	}
+	if err := s.moProducer.Close(); err != nil {
+		s.logger.Error("close mo producer", zap.Error(err))
 	}
 }

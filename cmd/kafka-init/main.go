@@ -41,6 +41,9 @@ func main() {
 	rf := config.GetEnvInt("KAFKA_TOPIC_REPLICATION_FACTOR", 1)
 	topics := []topicSpec{
 		{Topic: contractevents.TopicCardEvents, NumPartitions: partitions, ReplicationFactor: rf},
+		{Topic: contractevents.TopicCardActivate, NumPartitions: partitions, ReplicationFactor: rf},
+		{Topic: contractevents.TopicCardDLR, NumPartitions: partitions, ReplicationFactor: rf},
+		{Topic: contractevents.TopicCardMO, NumPartitions: partitions, ReplicationFactor: rf},
 		{Topic: contractevents.TopicSendSMS, NumPartitions: partitions, ReplicationFactor: rf},
 		{Topic: contractevents.TopicMessageLog, NumPartitions: partitions, ReplicationFactor: rf},
 	}
