@@ -14,6 +14,7 @@ import (
 type PoolConfig struct {
 	Connections    int           // number of SMPP connections (default 5)
 	WindowSize     int           // max outstanding submits per connection (default 10)
+	DeliverWorkers int           // goroutines per connection for DLR/MO handling (default 8)
 	ReconnectDelay time.Duration // delay between reconnect attempts (default 5s)
 }
 
@@ -40,6 +41,7 @@ func DefaultPoolConfig() PoolConfig {
 	return PoolConfig{
 		Connections:    5,
 		WindowSize:     10,
+		DeliverWorkers: 8,
 		ReconnectDelay: 5 * time.Second,
 	}
 }
@@ -53,6 +55,9 @@ func NewPool(smppConfig Config, poolConfig PoolConfig, handler DeliverHandler, l
 	}
 	if poolConfig.WindowSize <= 0 {
 		poolConfig.WindowSize = DefaultPoolConfig().WindowSize
+	}
+	if poolConfig.DeliverWorkers <= 0 {
+		poolConfig.DeliverWorkers = DefaultPoolConfig().DeliverWorkers
 	}
 	if poolConfig.ReconnectDelay <= 0 {
 		poolConfig.ReconnectDelay = DefaultPoolConfig().ReconnectDelay
@@ -91,7 +96,7 @@ func (p *Pool) Connect(ctx context.Context) error {
 			}
 		}
 
-		client := NewClient(p.config, p.handler, p.logger.With(zap.Int("conn_index", i)))
+		client := NewClientWithWorkers(p.config, p.handler, p.poolConfig.DeliverWorkers, p.logger.With(zap.Int("conn_index", i)))
 		pc := &poolConn{
 			client: client,
 			window: make(chan struct{}, p.poolConfig.WindowSize),

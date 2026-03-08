@@ -49,17 +49,18 @@ type DeliverHandler func(sourceAddr string, destAddr string, esmClass byte, payl
 
 // Client manages an SMPP transceiver connection over raw TCP.
 type Client struct {
-	config    Config
-	handler   DeliverHandler
-	logger    *zap.Logger
-	mu        sync.Mutex
-	conn      net.Conn
-	bound     bool
-	seqNum    uint32
-	pending   map[uint32]chan *PDU
-	pendingMu sync.Mutex
-	done      chan struct{}
-	deliverQ  chan deliverMessage
+	config         Config
+	handler        DeliverHandler
+	deliverWorkers int
+	logger         *zap.Logger
+	mu             sync.Mutex
+	conn           net.Conn
+	bound          bool
+	seqNum         uint32
+	pending        map[uint32]chan *PDU
+	pendingMu      sync.Mutex
+	done           chan struct{}
+	deliverQ       chan deliverMessage
 }
 
 type deliverMessage struct {
@@ -71,16 +72,26 @@ type deliverMessage struct {
 
 // NewClient creates a new SMPP transceiver client.
 func NewClient(config Config, handler DeliverHandler, logger *zap.Logger) *Client {
+	return NewClientWithWorkers(config, handler, 8, logger)
+}
+
+// NewClientWithWorkers creates a new SMPP transceiver client with a configurable
+// number of deliver handler workers.
+func NewClientWithWorkers(config Config, handler DeliverHandler, deliverWorkers int, logger *zap.Logger) *Client {
 	if config.EnquireLinkSec <= 0 {
 		config.EnquireLinkSec = 30
 	}
+	if deliverWorkers <= 0 {
+		deliverWorkers = 8
+	}
 	return &Client{
-		config:   config,
-		handler:  handler,
-		logger:   logger,
-		pending:  make(map[uint32]chan *PDU),
-		done:     make(chan struct{}),
-		deliverQ: make(chan deliverMessage, 1024),
+		config:         config,
+		handler:        handler,
+		deliverWorkers: deliverWorkers,
+		logger:         logger,
+		pending:        make(map[uint32]chan *PDU),
+		done:           make(chan struct{}),
+		deliverQ:       make(chan deliverMessage, 1024),
 	}
 }
 
@@ -435,10 +446,8 @@ func (c *Client) enquireLinkLoop() {
 	}
 }
 
-const deliverWorkers = 8
-
 func (c *Client) startDeliverLoop() {
-	for i := 0; i < deliverWorkers; i++ {
+	for i := 0; i < c.deliverWorkers; i++ {
 		go func(done <-chan struct{}, q <-chan deliverMessage) {
 			for {
 				select {

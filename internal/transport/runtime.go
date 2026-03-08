@@ -41,8 +41,9 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		EnquireLinkSec: 30,
 	}
 	poolConfig := smpp.PoolConfig{
-		Connections: config.GetEnvInt("SMPP_CONNECTIONS", 5),
-		WindowSize:  config.GetEnvInt("SMPP_WINDOW_SIZE", 10),
+		Connections:    config.GetEnvInt("SMPP_CONNECTIONS", 5),
+		WindowSize:     config.GetEnvInt("SMPP_WINDOW_SIZE", 10),
+		DeliverWorkers: config.GetEnvInt("SMPP_DELIVER_WORKERS", 8),
 	}
 
 	svc := NewService(smppConfig, poolConfig, bootstrap.KafkaBrokers(), rdb, logger.Named("sms-gateway"))
