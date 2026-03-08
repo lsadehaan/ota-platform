@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"sync"
@@ -145,8 +146,31 @@ func (a *API) SetupRouter() *gin.Engine {
 		v1.GET("/monitoring/messages/:id", a.GetMessage)
 		v1.GET("/monitoring/errors", a.GetErrorSummary)
 
+		v1.GET("/debug/card/:id", a.GetDebugCard)
+		v1.GET("/debug/campaign/:id", a.GetDebugCampaign)
+		v1.GET("/debug/message/:id", a.GetDebugMessage)
+		v1.GET("/debug/queues", a.GetDebugQueues)
+		v1.GET("/debug/stuck", a.GetDebugStuck)
+
 		v1.GET("/settings", a.GetSettings)
 		v1.PUT("/settings", a.UpdateSettings)
+	}
+
+	dbg := r.Group("/debug/pprof")
+	dbg.Use(apiKeyAuth(a.logger))
+	{
+		dbg.GET("/", gin.WrapF(pprof.Index))
+		dbg.GET("/cmdline", gin.WrapF(pprof.Cmdline))
+		dbg.GET("/profile", gin.WrapF(pprof.Profile))
+		dbg.POST("/symbol", gin.WrapF(pprof.Symbol))
+		dbg.GET("/symbol", gin.WrapF(pprof.Symbol))
+		dbg.GET("/trace", gin.WrapF(pprof.Trace))
+		dbg.GET("/allocs", gin.WrapH(pprof.Handler("allocs")))
+		dbg.GET("/block", gin.WrapH(pprof.Handler("block")))
+		dbg.GET("/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+		dbg.GET("/heap", gin.WrapH(pprof.Handler("heap")))
+		dbg.GET("/mutex", gin.WrapH(pprof.Handler("mutex")))
+		dbg.GET("/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
 	}
 
 	r.GET("/ws", func(c *gin.Context) {

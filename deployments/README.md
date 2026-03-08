@@ -70,6 +70,23 @@ docker compose -f deployments/docker-compose.yml -f deployments/docker-compose.l
 - PostgreSQL metrics come from `postgres-exporter` and `pg_stat_statements` is enabled in the main Postgres container.
 - Scylla is scraped directly on its Prometheus metrics endpoint.
 - Use Kafka UI, RedisInsight, and pgAdmin to inspect stored state directly during debugging.
+- Dragonfly is scraped directly on `http://dragonfly:6379/metrics` through Prometheus.
+- Internal debug endpoints are available under `/api/v1/debug/*` and pprof is available under `/debug/pprof/*`.
+
+## Debug endpoints
+
+- `GET /api/v1/debug/card/:id`
+- `GET /api/v1/debug/campaign/:id`
+- `GET /api/v1/debug/message/:id`
+- `GET /api/v1/debug/queues`
+- `GET /api/v1/debug/stuck`
+
+Examples:
+
+```bash
+curl -H "Authorization: Bearer $API_KEY" http://localhost:8080/api/v1/debug/queues
+curl -H "Authorization: Bearer $API_KEY" http://localhost:8080/api/v1/debug/stuck
+```
 - If you recreate services independently and container IDs change, refresh Prometheus with:
 
 ```bash

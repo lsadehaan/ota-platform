@@ -31,6 +31,19 @@ type CampaignCardView struct {
 	UpdatedAt   time.Time
 }
 
+type CardStateRecord struct {
+	CardID            uuid.UUID  `json:"card_id"`
+	CampaignID        *uuid.UUID `json:"campaign_id,omitempty"`
+	Status            string     `json:"status"`
+	CurrentStep       int        `json:"current_step"`
+	RetryCount        int        `json:"retry_count"`
+	LastMsgID         *uuid.UUID `json:"last_msg_id,omitempty"`
+	LastSMPPMessageID string     `json:"last_smpp_message_id,omitempty"`
+	LastErrorCode     string     `json:"last_error_code,omitempty"`
+	LastErrorText     string     `json:"last_error_text,omitempty"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
 type MessageRecord struct {
 	ID             uuid.UUID
 	CampaignID     *uuid.UUID
@@ -500,6 +513,50 @@ func (s *QueryStore) AbortCampaign(ctx context.Context, campaignID uuid.UUID, up
 
 func toGocqlUUID(id uuid.UUID) gocql.UUID {
 	return gocql.UUID(id)
+}
+
+func (s *QueryStore) GetCardState(ctx context.Context, cardID uuid.UUID) (*CardStateRecord, error) {
+	var (
+		campaignID        *gocql.UUID
+		status            string
+		currentStep       int
+		retryCount        int
+		lastMsgID         *gocql.UUID
+		lastSMPPMessageID string
+		lastErrorCode     string
+		lastErrorText     string
+		updatedAt         time.Time
+	)
+	err := s.client.Session().Query(
+		`SELECT campaign_id, status, current_step, retry_count, last_msg_id, last_smpp_message_id, last_error_code, last_error_text, updated_at
+		 FROM card_state_by_card WHERE card_bucket = ? AND card_id = ?`,
+		s.client.CardBucket(cardID.String()), toGocqlUUID(cardID),
+	).WithContext(ctx).Scan(&campaignID, &status, &currentStep, &retryCount, &lastMsgID, &lastSMPPMessageID, &lastErrorCode, &lastErrorText, &updatedAt)
+	if err == gocql.ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	state := &CardStateRecord{
+		CardID:            cardID,
+		Status:            status,
+		CurrentStep:       currentStep,
+		RetryCount:        retryCount,
+		LastSMPPMessageID: lastSMPPMessageID,
+		LastErrorCode:     lastErrorCode,
+		LastErrorText:     lastErrorText,
+		UpdatedAt:         updatedAt.UTC(),
+	}
+	if campaignID != nil {
+		cid := uuid.UUID(*campaignID)
+		state.CampaignID = &cid
+	}
+	if lastMsgID != nil {
+		mid := uuid.UUID(*lastMsgID)
+		state.LastMsgID = &mid
+	}
+	return state, nil
 }
 
 func (s *QueryStore) GetMessage(ctx context.Context, msgID uuid.UUID) (*MessageRecord, error) {

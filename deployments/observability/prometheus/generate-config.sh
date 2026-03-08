@@ -42,6 +42,11 @@ scrape_configs:
     static_configs:
       - targets: ['postgres-exporter:9187']
 
+  - job_name: dragonfly
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['dragonfly:6379']
+
   - job_name: scylla
     static_configs:
       - targets: ['scylla:9180']

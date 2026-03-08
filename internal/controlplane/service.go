@@ -28,6 +28,7 @@ type QueryStore interface {
 	InitializeCampaign(ctx context.Context, campaignID uuid.UUID, cardIDs []uuid.UUID, initialStep int, updatedAt time.Time) error
 	AbortCampaign(ctx context.Context, campaignID uuid.UUID, updatedAt time.Time) (int, error)
 	GetMessage(ctx context.Context, msgID uuid.UUID) (*scyllastore.MessageRecord, error)
+	GetCardState(ctx context.Context, cardID uuid.UUID) (*scyllastore.CardStateRecord, error)
 	ListCardMessages(ctx context.Context, cardID uuid.UUID, limit int) ([]scyllastore.MessageRecord, error)
 	ListMessages(ctx context.Context, filter scyllastore.MessageFilter) ([]scyllastore.MessageRecord, int64, error)
 	RecentActivity(ctx context.Context, limit int) ([]scyllastore.MessageRecord, error)
