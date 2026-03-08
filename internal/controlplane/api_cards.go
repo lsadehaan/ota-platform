@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"ota-platform/internal/db"
 	"ota-platform/pkg/hexutil"
@@ -366,7 +367,7 @@ func (a *API) GetCardCounters(c *gin.Context) {
 
 // ImportCards handles POST /api/v1/cards/import with CSV file upload.
 func (a *API) ImportCards(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 100<<20)
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
 		errorResponse(c, http.StatusBadRequest, "file is required")
@@ -375,6 +376,7 @@ func (a *API) ImportCards(c *gin.Context) {
 	defer file.Close()
 
 	reader := csv.NewReader(file)
+	reader.ReuseRecord = true
 
 	// Read and validate header
 	header, err := reader.Read()
@@ -400,9 +402,27 @@ func (a *API) ImportCards(c *gin.Context) {
 	// Cache profile name -> ID lookups
 	profileCache := make(map[string]uuid.UUID)
 
+	const batchSize = 2000
+
 	var created, skipped, errCount int
 	var errors []string
 	lineNum := 1
+	batch := make([]db.Card, 0, batchSize)
+
+	flushBatch := func() error {
+		if len(batch) == 0 {
+			return nil
+		}
+		result := a.db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(batch, batchSize)
+		if result.Error != nil {
+			return result.Error
+		}
+		inserted := int(result.RowsAffected)
+		created += inserted
+		skipped += len(batch) - inserted
+		batch = batch[:0]
+		return nil
+	}
 
 	for {
 		record, err := reader.Read()
@@ -456,7 +476,7 @@ func (a *API) ImportCards(c *gin.Context) {
 			continue
 		}
 
-		card := db.Card{
+		batch = append(batch, db.Card{
 			ICCID:     iccid,
 			IMSI:      imsi,
 			MSISDN:    msisdn,
@@ -464,15 +484,21 @@ func (a *API) ImportCards(c *gin.Context) {
 			EncKey:    encKey,
 			AuthKey:   authKey,
 			Status:    "active",
-		}
+		})
 
-		if err := a.db.Create(&card).Error; err != nil {
-			skipped++
-			errors = append(errors, fmt.Sprintf("line %d: %s", lineNum, err.Error()))
-			continue
+		if len(batch) >= batchSize {
+			if err := flushBatch(); err != nil {
+				a.logger.Error("failed to import card batch", zap.Error(err))
+				errorResponse(c, http.StatusInternalServerError, "failed to import cards")
+				return
+			}
 		}
+	}
 
-		created++
+	if err := flushBatch(); err != nil {
+		a.logger.Error("failed to import final card batch", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "failed to import cards")
+		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{

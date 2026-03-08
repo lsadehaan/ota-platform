@@ -4,12 +4,14 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"ota-platform/internal/db"
 	scyllastore "ota-platform/internal/scylla"
@@ -276,8 +278,8 @@ func (a *API) CreateCampaign(c *gin.Context) {
 		campaign.ScheduledAt = &t
 	}
 
-	// Resolve target cards
-	var cardIDs []uuid.UUID
+	// Resolve explicit target cards
+	var explicitCardIDs []uuid.UUID
 
 	// Explicit card IDs
 	for _, idStr := range req.CardIDs {
@@ -286,63 +288,52 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			errorResponse(c, http.StatusBadRequest, "invalid card_id: "+idStr)
 			return
 		}
-		cardIDs = append(cardIDs, id)
+		explicitCardIDs = append(explicitCardIDs, id)
 	}
 
-	// Cards by profile
+	var profileID *uuid.UUID
 	if req.ProfileID != "" {
-		profileID, err := uuid.Parse(req.ProfileID)
+		parsed, err := uuid.Parse(req.ProfileID)
 		if err != nil {
 			errorResponse(c, http.StatusBadRequest, "invalid profile_id")
 			return
 		}
-		var profileCards []db.Card
-		if err := a.db.Where("profile_id = ? AND status = 'active'", profileID).Find(&profileCards).Error; err != nil {
-			a.logger.Error("failed to fetch profile cards", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to fetch profile cards")
-			return
-		}
-		for _, card := range profileCards {
-			cardIDs = append(cardIDs, card.ID)
-		}
+		profileID = &parsed
 	}
 
-	// Cards by group
+	var groupID *uuid.UUID
 	if req.CardGroupID != "" {
-		groupID, err := uuid.Parse(req.CardGroupID)
+		parsed, err := uuid.Parse(req.CardGroupID)
 		if err != nil {
 			errorResponse(c, http.StatusBadRequest, "invalid card_group_id")
 			return
 		}
-		var members []db.CardGroupMember
-		if err := a.db.Where("card_group_id = ?", groupID).Find(&members).Error; err != nil {
-			a.logger.Error("failed to fetch group members", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to fetch group members")
-			return
-		}
-		for _, m := range members {
-			cardIDs = append(cardIDs, m.CardID)
-		}
+		groupID = &parsed
 	}
 
-	// Deduplicate card IDs
+	// Deduplicate explicit card IDs
 	seen := make(map[uuid.UUID]bool)
-	var uniqueCardIDs []uuid.UUID
-	for _, id := range cardIDs {
+	uniqueCardIDs := make([]uuid.UUID, 0, len(explicitCardIDs))
+	for _, id := range explicitCardIDs {
 		if !seen[id] {
 			seen[id] = true
 			uniqueCardIDs = append(uniqueCardIDs, id)
 		}
 	}
 
-	if len(uniqueCardIDs) == 0 {
+	if len(uniqueCardIDs) == 0 && profileID == nil && groupID == nil {
 		errorResponse(c, http.StatusBadRequest, "no target cards specified")
 		return
 	}
 
-	// For wizard campaigns, validate all target cards belong to the same profile as the application.
+	// For wizard campaigns, validate the application exists.
+	var applicationProfileID *uuid.UUID
 	if req.ApplicationID != "" {
-		appID, _ := uuid.Parse(req.ApplicationID)
+		appID, err := uuid.Parse(req.ApplicationID)
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "invalid application_id")
+			return
+		}
 		var app db.Application
 		if err := a.db.Select("profile_id").First(&app, "id = ?", appID).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
@@ -353,18 +344,16 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			errorResponse(c, http.StatusInternalServerError, "failed to validate application profile")
 			return
 		}
-		var mismatchCount int64
-		a.db.Model(&db.Card{}).
-			Where("id IN ? AND profile_id != ?", uniqueCardIDs, app.ProfileID).
-			Count(&mismatchCount)
-		if mismatchCount > 0 {
-			errorResponse(c, http.StatusBadRequest,
-				fmt.Sprintf("%d cards do not belong to the application's profile", mismatchCount))
+		applicationProfileID = &app.ProfileID
+		if profileID != nil && *profileID != app.ProfileID {
+			errorResponse(c, http.StatusBadRequest, "profile_id does not match the application's profile")
 			return
 		}
 	}
 
-	// Use a transaction for campaign + commands + cards
+	var targetCount int64
+
+	// Use a transaction for campaign + commands + targets
 	err := a.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&campaign).Error; err != nil {
 			return err
@@ -392,16 +381,64 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			}
 		}
 
-		// Create campaign targets in batches to avoid large per-row ORM overhead.
-		targets := make([]db.CampaignTarget, 0, len(uniqueCardIDs))
-		for _, cardID := range uniqueCardIDs {
-			targets = append(targets, db.CampaignTarget{
-				CampaignID: campaign.ID,
-				CardID:     cardID,
-			})
+		if len(uniqueCardIDs) > 0 {
+			targets := make([]db.CampaignTarget, 0, len(uniqueCardIDs))
+			for _, cardID := range uniqueCardIDs {
+				targets = append(targets, db.CampaignTarget{
+					CampaignID: campaign.ID,
+					CardID:     cardID,
+				})
+			}
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(targets, 2000).Error; err != nil {
+				return err
+			}
 		}
-		if err := tx.CreateInBatches(targets, 500).Error; err != nil {
+
+		if profileID != nil {
+			if err := tx.Exec(`
+				INSERT INTO campaign_targets (campaign_id, card_id, created_at)
+				SELECT ?, id, NOW()
+				FROM cards
+				WHERE profile_id = ? AND status = 'active'
+				ON CONFLICT DO NOTHING
+			`, campaign.ID, *profileID).Error; err != nil {
+				return err
+			}
+		}
+
+		if groupID != nil {
+			if err := tx.Exec(`
+				INSERT INTO campaign_targets (campaign_id, card_id, created_at)
+				SELECT ?, cgm.card_id, NOW()
+				FROM card_group_members cgm
+				JOIN cards c ON c.id = cgm.card_id
+				WHERE cgm.card_group_id = ?
+				ON CONFLICT DO NOTHING
+			`, campaign.ID, *groupID).Error; err != nil {
+				return err
+			}
+		}
+
+		if applicationProfileID != nil {
+			var mismatchCount int64
+			if err := tx.Table("campaign_targets ct").
+				Joins("JOIN cards c ON c.id = ct.card_id").
+				Where("ct.campaign_id = ? AND c.profile_id <> ?", campaign.ID, *applicationProfileID).
+				Count(&mismatchCount).Error; err != nil {
+				return err
+			}
+			if mismatchCount > 0 {
+				return fmt.Errorf("%d cards do not belong to the application's profile", mismatchCount)
+			}
+		}
+
+		if err := tx.Model(&db.CampaignTarget{}).
+			Where("campaign_id = ?", campaign.ID).
+			Count(&targetCount).Error; err != nil {
 			return err
+		}
+		if targetCount == 0 {
+			return fmt.Errorf("no target cards specified")
 		}
 
 		return nil
@@ -409,6 +446,11 @@ func (a *API) CreateCampaign(c *gin.Context) {
 
 	if err != nil {
 		a.logger.Error("failed to create campaign", zap.Error(err))
+		if strings.Contains(err.Error(), "do not belong to the application's profile") ||
+			strings.Contains(err.Error(), "no target cards specified") {
+			errorResponse(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		errorResponse(c, http.StatusInternalServerError, "failed to create campaign")
 		return
 	}
@@ -423,7 +465,7 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			// Return the campaign anyway; it was created successfully
 			c.JSON(http.StatusCreated, gin.H{
 				"data":        campaign,
-				"card_count":  len(uniqueCardIDs),
+				"card_count":  targetCount,
 				"start_error": startErr.Error(),
 			})
 			return
@@ -434,7 +476,7 @@ func (a *API) CreateCampaign(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"data":       campaign,
-		"card_count": len(uniqueCardIDs),
+		"card_count": targetCount,
 	})
 }
 

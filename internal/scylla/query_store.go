@@ -160,24 +160,28 @@ func (s *QueryStore) InitializeCampaign(ctx context.Context, campaignID uuid.UUI
 }
 
 func (s *QueryStore) CampaignStats(ctx context.Context, campaignID uuid.UUID) (CampaignStats, error) {
-	iter := s.client.Session().Query(
-		`SELECT pending, in_progress, completed, failed, skipped FROM campaign_progress_by_bucket WHERE campaign_id = ?`,
-		toGocqlUUID(campaignID),
-	).WithContext(ctx).Iter()
-
-	var stats CampaignStats
-	var pending, inProgress, completed, failed, skipped int64
-	for iter.Scan(&pending, &inProgress, &completed, &failed, &skipped) {
-		stats.Pending += pending
-		stats.InProgress += inProgress
-		stats.Completed += completed
-		stats.Failed += failed
-		stats.Skipped += skipped
-	}
-	if err := iter.Close(); err != nil {
+	rows, err := s.latestCampaignCardViews(ctx, campaignID)
+	if err != nil {
 		return CampaignStats{}, err
 	}
-	stats.Total = stats.Pending + stats.InProgress + stats.Completed + stats.Failed + stats.Skipped
+	var stats CampaignStats
+	for _, row := range rows {
+		switch counterColumn(row.Status) {
+		case "pending":
+			stats.Pending++
+		case "in_progress":
+			stats.InProgress++
+		case "completed":
+			stats.Completed++
+		case "failed":
+			stats.Failed++
+		case "skipped":
+			stats.Skipped++
+		default:
+			stats.Pending++
+		}
+	}
+	stats.Total = int64(len(rows))
 	return normalizeCampaignStats(stats), nil
 }
 
@@ -246,35 +250,79 @@ func normalizeCampaignStats(stats CampaignStats) CampaignStats {
 	return stats
 }
 
-func (s *QueryStore) ListCampaignCards(ctx context.Context, campaignID uuid.UUID, statusFilter string) ([]CampaignCardView, error) {
-	var out []CampaignCardView
-	for bucket := 0; bucket < s.client.BucketCount(); bucket++ {
-		var query string
-		var args []interface{}
-		if statusFilter != "" {
-			query = `SELECT status, updated_at, card_id, current_step, retry_count, last_msg_id, last_error_text
-				FROM campaign_card_status_by_bucket
-				WHERE campaign_id = ? AND campaign_bucket = ? AND status = ?`
-			args = []interface{}{toGocqlUUID(campaignID), bucket, statusFilter}
-		} else {
-			query = `SELECT status, updated_at, card_id, current_step, retry_count, last_msg_id, last_error_text
-				FROM campaign_card_status_by_bucket
-				WHERE campaign_id = ? AND campaign_bucket = ?`
-			args = []interface{}{toGocqlUUID(campaignID), bucket}
-		}
+func campaignCardViewWins(current, candidate CampaignCardView) bool {
+	if candidate.UpdatedAt.After(current.UpdatedAt) {
+		return true
+	}
+	if current.UpdatedAt.After(candidate.UpdatedAt) {
+		return false
+	}
+	return campaignStatusRank(candidate.Status) > campaignStatusRank(current.Status)
+}
 
-		iter := s.client.Session().Query(query, args...).WithContext(ctx).Iter()
+func campaignStatusRank(status string) int {
+	switch status {
+	case "completed":
+		return 5
+	case "failed":
+		return 4
+	case "skipped":
+		return 3
+	case "in_progress", "awaiting_dlr", "awaiting_mo":
+		return 2
+	case "pending", "activating":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func (s *QueryStore) latestCampaignCardViews(ctx context.Context, campaignID uuid.UUID) ([]CampaignCardView, error) {
+	latest := make(map[string]CampaignCardView)
+	for bucket := 0; bucket < s.client.BucketCount(); bucket++ {
+		iter := s.client.Session().Query(
+			`SELECT status, updated_at, card_id, current_step, retry_count, last_msg_id, last_error_text
+				FROM campaign_card_status_by_bucket
+				WHERE campaign_id = ? AND campaign_bucket = ?`,
+			toGocqlUUID(campaignID), bucket,
+		).WithContext(ctx).Iter()
+
 		rows, err := scanCampaignCardViews(iter)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, rows...)
+		for _, row := range rows {
+			if current, ok := latest[row.CardID]; !ok || campaignCardViewWins(current, row) {
+				latest[row.CardID] = row
+			}
+		}
 	}
 
+	out := make([]CampaignCardView, 0, len(latest))
+	for _, row := range latest {
+		out = append(out, row)
+	}
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].UpdatedAt.After(out[j].UpdatedAt)
 	})
 	return out, nil
+}
+
+func (s *QueryStore) ListCampaignCards(ctx context.Context, campaignID uuid.UUID, statusFilter string) ([]CampaignCardView, error) {
+	out, err := s.latestCampaignCardViews(ctx, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	if statusFilter == "" {
+		return out, nil
+	}
+	filtered := make([]CampaignCardView, 0, len(out))
+	for _, row := range out {
+		if row.Status == statusFilter {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered, nil
 }
 
 func (s *QueryStore) ListFailedCardIDs(ctx context.Context, campaignID uuid.UUID) ([]uuid.UUID, error) {

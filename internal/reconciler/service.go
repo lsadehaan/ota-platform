@@ -10,10 +10,12 @@ import (
 	"gorm.io/gorm"
 
 	"ota-platform/internal/db"
+	scyllastore "ota-platform/internal/scylla"
 )
 
 type Service struct {
 	db              *gorm.DB
+	query           *scyllastore.QueryStore
 	logger          *zap.Logger
 	reclaimInterval time.Duration
 	cleanupInterval time.Duration
@@ -22,7 +24,7 @@ type Service struct {
 	cleanedTotal    metric.Int64Counter
 }
 
-func NewService(database *gorm.DB, logger *zap.Logger) *Service {
+func NewService(database *gorm.DB, query *scyllastore.QueryStore, logger *zap.Logger) *Service {
 	meter := otel.Meter("reconciler")
 	reclaimedTotal, err := meter.Int64Counter("ota.reconciler.shards_reclaimed", metric.WithDescription("Campaign shards reclaimed by the reconciler"))
 	if err != nil {
@@ -34,6 +36,7 @@ func NewService(database *gorm.DB, logger *zap.Logger) *Service {
 	}
 	return &Service{
 		db:              database,
+		query:           query,
 		logger:          logger,
 		reclaimInterval: 1 * time.Minute,
 		cleanupInterval: 10 * time.Minute,
@@ -57,6 +60,7 @@ func (s *Service) Run(ctx context.Context) error {
 			return nil
 		case <-reclaimTicker.C:
 			s.reclaimStaleCampaignShards(ctx)
+			s.completeTerminalCampaigns(ctx)
 		case <-cleanupTicker.C:
 			s.cleanupPublishedCampaignShards(ctx)
 		}
@@ -97,5 +101,75 @@ func (s *Service) cleanupPublishedCampaignShards(ctx context.Context) {
 			s.cleanedTotal.Add(ctx, result.RowsAffected)
 		}
 		s.logger.Info("cleaned published campaign shards", zap.Int64("count", result.RowsAffected))
+	}
+}
+
+func (s *Service) completeTerminalCampaigns(ctx context.Context) {
+	if s.query == nil {
+		return
+	}
+
+	var campaigns []db.Campaign
+	if err := s.db.WithContext(ctx).
+		Where("status = ?", "running").
+		Find(&campaigns).Error; err != nil {
+		s.logger.Error("failed to list running campaigns for reconciliation", zap.Error(err))
+		return
+	}
+
+	for _, campaign := range campaigns {
+		stats, err := s.query.CampaignStats(ctx, campaign.ID)
+		if err != nil {
+			s.logger.Warn("failed to load campaign stats for reconciliation",
+				zap.String("campaign_id", campaign.ID.String()),
+				zap.Error(err),
+			)
+			continue
+		}
+		if stats.Total == 0 {
+			continue
+		}
+		terminal := stats.Completed + stats.Failed + stats.Skipped
+		if terminal < stats.Total {
+			continue
+		}
+
+		finalStatus := "completed"
+		if stats.Failed > 0 {
+			if stats.Completed > 0 || stats.Skipped > 0 {
+				finalStatus = "completed_with_errors"
+			} else {
+				finalStatus = "failed"
+			}
+		} else if stats.Skipped > 0 {
+			finalStatus = "completed_with_errors"
+		}
+
+		now := time.Now().UTC()
+		result := s.db.WithContext(ctx).
+			Model(&db.Campaign{}).
+			Where("id = ? AND status = ?", campaign.ID, "running").
+			Updates(map[string]any{
+				"status":       finalStatus,
+				"completed_at": now,
+				"updated_at":   now,
+			})
+		if result.Error != nil {
+			s.logger.Warn("failed to reconcile terminal campaign",
+				zap.String("campaign_id", campaign.ID.String()),
+				zap.Error(result.Error),
+			)
+			continue
+		}
+		if result.RowsAffected > 0 {
+			s.logger.Info("reconciled terminal campaign",
+				zap.String("campaign_id", campaign.ID.String()),
+				zap.String("status", finalStatus),
+				zap.Int64("total", stats.Total),
+				zap.Int64("completed", stats.Completed),
+				zap.Int64("failed", stats.Failed),
+				zap.Int64("skipped", stats.Skipped),
+			)
+		}
 	}
 }

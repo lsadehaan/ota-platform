@@ -200,25 +200,44 @@ func (s *ExecutionStore) CampaignStats(ctx context.Context, campaignID string) (
 		return CampaignStats{}, fmt.Errorf("parse campaign_id: %w", err)
 	}
 
-	iter := s.client.Session().Query(
-		`SELECT pending, in_progress, completed, failed, skipped FROM campaign_progress_by_bucket WHERE campaign_id = ?`,
-		campaignUUID,
-	).WithContext(ctx).Iter()
+	latest := make(map[string]CampaignCardView)
+	for bucket := 0; bucket < s.client.BucketCount(); bucket++ {
+		iter := s.client.Session().Query(
+			`SELECT status, updated_at, card_id, current_step, retry_count, last_msg_id, last_error_text
+				FROM campaign_card_status_by_bucket
+				WHERE campaign_id = ? AND campaign_bucket = ?`,
+			campaignUUID, bucket,
+		).WithContext(ctx).Iter()
+		rows, err := scanCampaignCardViews(iter)
+		if err != nil {
+			return CampaignStats{}, err
+		}
+		for _, row := range rows {
+			if current, ok := latest[row.CardID]; !ok || campaignCardViewWins(current, row) {
+				latest[row.CardID] = row
+			}
+		}
+	}
 
 	var stats CampaignStats
-	var pending, inProgress, completed, failed, skipped int64
-	for iter.Scan(&pending, &inProgress, &completed, &failed, &skipped) {
-		stats.Pending += pending
-		stats.InProgress += inProgress
-		stats.Completed += completed
-		stats.Failed += failed
-		stats.Skipped += skipped
+	for _, row := range latest {
+		switch counterColumn(row.Status) {
+		case "pending":
+			stats.Pending++
+		case "in_progress":
+			stats.InProgress++
+		case "completed":
+			stats.Completed++
+		case "failed":
+			stats.Failed++
+		case "skipped":
+			stats.Skipped++
+		default:
+			stats.Pending++
+		}
 	}
-	if err := iter.Close(); err != nil {
-		return CampaignStats{}, err
-	}
-	stats.Total = stats.Pending + stats.InProgress + stats.Completed + stats.Failed + stats.Skipped
-	return stats, nil
+	stats.Total = int64(len(latest))
+	return normalizeCampaignStats(stats), nil
 }
 
 func counterColumn(status string) string {

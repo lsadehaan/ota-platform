@@ -9,6 +9,7 @@ import (
 
 	"ota-platform/internal/bootstrap"
 	"ota-platform/internal/observability"
+	scyllastore "ota-platform/internal/scylla"
 )
 
 func Run(ctx context.Context, logger *zap.Logger) error {
@@ -25,6 +26,9 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}()
 
 	database := bootstrap.MustGormDB(logger)
-	service := NewService(database, logger.Named("reconciler"))
+	scyllaClient := bootstrap.MustScylla(logger)
+	defer scyllaClient.Close()
+	queryStore := scyllastore.NewQueryStore(scyllaClient)
+	service := NewService(database, queryStore, logger.Named("reconciler"))
 	return service.Run(ctx)
 }
