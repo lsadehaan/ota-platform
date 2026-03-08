@@ -32,6 +32,9 @@ docker compose -f deployments/docker-compose.yml -f deployments/docker-compose.l
 - API: `http://localhost:8080`
 - Prometheus: `http://localhost:9090`
 - Grafana: `http://localhost:3002` (`admin / admin`)
+- Kafka UI: `http://localhost:8085`
+- RedisInsight: `http://localhost:5540`
+- pgAdmin: `http://localhost:5050` (`admin@example.com / admin`)
 
 ## Tooling containers
 
@@ -63,6 +66,10 @@ docker compose -f deployments/docker-compose.yml -f deployments/docker-compose.l
 - Grafana dashboard: `OTA Local Performance`
 - CPU and memory panels are driven by cAdvisor plus a generated Prometheus relabel config.
 - The relabel config is generated on stack startup by `prometheus-config` from the current container IDs.
+- Kafka broker and consumer-group metrics come from `kafka-exporter`.
+- PostgreSQL metrics come from `postgres-exporter` and `pg_stat_statements` is enabled in the main Postgres container.
+- Scylla is scraped directly on its Prometheus metrics endpoint.
+- Use Kafka UI, RedisInsight, and pgAdmin to inspect stored state directly during debugging.
 - If you recreate services independently and container IDs change, refresh Prometheus with:
 
 ```bash

@@ -1,0 +1,22 @@
+pg_stat_statements_top:
+  query: |
+    SELECT queryid, calls, total_exec_time, mean_exec_time, rows
+    FROM pg_stat_statements
+    ORDER BY total_exec_time DESC
+    LIMIT 20
+  metrics:
+    - queryid:
+        usage: "LABEL"
+        description: "PostgreSQL query id"
+    - calls:
+        usage: "GAUGE"
+        description: "Number of times executed"
+    - total_exec_time:
+        usage: "GAUGE"
+        description: "Total execution time in ms"
+    - mean_exec_time:
+        usage: "GAUGE"
+        description: "Mean execution time in ms"
+    - rows:
+        usage: "GAUGE"
+        description: "Rows returned or affected"

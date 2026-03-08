@@ -34,6 +34,18 @@ scrape_configs:
     static_configs:
       - targets: ['otel-collector:9464']
 
+  - job_name: kafka-exporter
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+
+  - job_name: scylla
+    static_configs:
+      - targets: ['scylla:9180']
+
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']
@@ -43,7 +55,7 @@ CFG
 docker ps --format '{{.ID}} {{.Names}}' | while read -r id name; do
   case "$name" in
     ${project}-*)
-      service=$(printf '%s' "$name" | sed -E "s#^${project}-##; s#-[0-9]+$##")
+      service=$(printf '%s' "$name" | sed "s/^${project}-//" | sed 's/-[0-9]*$//')
       case "$service" in
         kafka|scylla|dragonfly|ota-api|campaign-planner|card-executor|read-model-projector|sms-gateway|reconciler|mock-smsc|web|postgres)
           cat >> "$out" <<CFG
