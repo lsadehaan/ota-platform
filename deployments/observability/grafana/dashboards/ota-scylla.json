@@ -1,0 +1,66 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Coordinator Throughput",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "sum(rate(scylla_storage_proxy_coordinator_read_latency_count[1m]))", "legendFormat": "reads/sec"},
+        {"expr": "sum(rate(scylla_storage_proxy_coordinator_write_latency_count[1m]))", "legendFormat": "writes/sec"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Coordinator Average Latency (ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "1000 * sum(rate(scylla_storage_proxy_coordinator_read_latency_sum[1m])) / clamp_min(sum(rate(scylla_storage_proxy_coordinator_read_latency_count[1m])), 1)", "legendFormat": "read avg ms"},
+        {"expr": "1000 * sum(rate(scylla_storage_proxy_coordinator_write_latency_sum[1m])) / clamp_min(sum(rate(scylla_storage_proxy_coordinator_write_latency_count[1m])), 1)", "legendFormat": "write avg ms"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cache and Memtables",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "sum(scylla_cache_bytes)", "legendFormat": "cache bytes"},
+        {"expr": "sum(scylla_memtables_dirty_memory)", "legendFormat": "memtables dirty bytes"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Compaction and Tombstones",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "sum(scylla_compaction_manager_compactions)", "legendFormat": "active compactions"},
+        {"expr": "sum(rate(scylla_database_total_writes_failed[1m]))", "legendFormat": "write failures/sec"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Reactor Utilization by Shard",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 16},
+      "targets": [
+        {"expr": "scylla_reactor_utilization", "legendFormat": "shard {{shard}}"}
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["ota", "scylla"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OTA Scylla",
+  "uid": "ota-scylla",
+  "version": 1,
+  "weekStart": ""
+}

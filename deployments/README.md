@@ -63,7 +63,13 @@ docker compose -f deployments/docker-compose.yml -f deployments/docker-compose.l
 
 ## Observability notes
 
-- Grafana dashboard: `OTA Local Performance`
+- Grafana dashboards:
+  - `OTA Local Performance`
+  - `OTA Infrastructure Overview`
+  - `OTA Kafka`
+  - `OTA PostgreSQL`
+  - `OTA Scylla`
+  - `OTA Dragonfly`
 - CPU and memory panels are driven by cAdvisor plus a generated Prometheus relabel config.
 - The relabel config is generated on stack startup by `prometheus-config` from the current container IDs.
 - Kafka broker and consumer-group metrics come from `kafka-exporter`.

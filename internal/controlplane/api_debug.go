@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"net/http"
-	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -11,7 +10,6 @@ import (
 	"gorm.io/gorm"
 
 	"ota-platform/internal/db"
-	scyllastore "ota-platform/internal/scylla"
 )
 
 func (a *API) GetDebugCard(c *gin.Context) {

@@ -1,0 +1,62 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Dragonfly Clients and Keys",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "dragonfly_connected_clients", "legendFormat": "connected clients"},
+        {"expr": "dragonfly_blocked_clients", "legendFormat": "blocked clients"},
+        {"expr": "dragonfly_keys", "legendFormat": "keys"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dragonfly Memory",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "dragonfly_used_memory", "legendFormat": "used memory bytes"},
+        {"expr": "dragonfly_used_memory_rss", "legendFormat": "rss bytes"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dragonfly Ops and Network",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "rate(dragonfly_commands_processed_total[1m])", "legendFormat": "commands/sec"},
+        {"expr": "rate(dragonfly_net_input_bytes_total[1m])", "legendFormat": "input bytes/sec"},
+        {"expr": "rate(dragonfly_net_output_bytes_total[1m])", "legendFormat": "output bytes/sec"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Dragonfly Cache Efficiency",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "rate(dragonfly_keyspace_hits_total[1m])", "legendFormat": "hits/sec"},
+        {"expr": "rate(dragonfly_keyspace_misses_total[1m])", "legendFormat": "misses/sec"},
+        {"expr": "rate(dragonfly_expired_keys_total[1m])", "legendFormat": "expired/sec"},
+        {"expr": "rate(dragonfly_evicted_keys_total[1m])", "legendFormat": "evicted/sec"}
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["ota", "dragonfly"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OTA Dragonfly",
+  "uid": "ota-dragonfly",
+  "version": 1,
+  "weekStart": ""
+}
