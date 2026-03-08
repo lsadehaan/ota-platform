@@ -59,6 +59,14 @@ type Client struct {
 	pending   map[uint32]chan *PDU
 	pendingMu sync.Mutex
 	done      chan struct{}
+	deliverQ  chan deliverMessage
+}
+
+type deliverMessage struct {
+	sourceAddr string
+	destAddr   string
+	esmClass   byte
+	payload    []byte
 }
 
 // NewClient creates a new SMPP transceiver client.
@@ -67,11 +75,12 @@ func NewClient(config Config, handler DeliverHandler, logger *zap.Logger) *Clien
 		config.EnquireLinkSec = 30
 	}
 	return &Client{
-		config:  config,
-		handler: handler,
-		logger:  logger,
-		pending: make(map[uint32]chan *PDU),
-		done:    make(chan struct{}),
+		config:   config,
+		handler:  handler,
+		logger:   logger,
+		pending:  make(map[uint32]chan *PDU),
+		done:     make(chan struct{}),
+		deliverQ: make(chan deliverMessage, 1024),
 	}
 }
 
@@ -99,8 +108,10 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	c.conn = conn
 	c.done = make(chan struct{})
+	c.deliverQ = make(chan deliverMessage, 1024)
 
 	// Start the reader goroutine before sending bind so we can receive the response.
+	c.startDeliverLoop()
 	go c.ReadLoop()
 
 	// Send bind_transceiver.
@@ -350,18 +361,21 @@ func (c *Client) dispatchPDU(pdu *PDU) {
 		}
 
 	case CmdDeliverSM:
-		// Incoming deliver_sm: parse and forward to handler, then send response.
+		// Incoming deliver_sm: acknowledge immediately and queue handler work
+		// off the socket read loop. Ordering is preserved per SMPP connection.
 		sourceAddr, destAddr, esmClass, shortMessage := ParseDeliverSM(pdu.Body)
 
-		// Send deliver_sm_resp immediately.
 		resp := EncodeDeliverSMResp(pdu.SequenceNumber)
 		if err := c.writePDU(resp); err != nil {
 			c.logger.Error("failed to send deliver_sm_resp", zap.Error(err))
 		}
 
-		if c.handler != nil {
-			c.handler(sourceAddr, destAddr, esmClass, shortMessage)
-		}
+		c.enqueueDeliver(deliverMessage{
+			sourceAddr: sourceAddr,
+			destAddr:   destAddr,
+			esmClass:   esmClass,
+			payload:    append([]byte(nil), shortMessage...),
+		})
 
 	case CmdEnquireLink:
 		// Respond to enquire_link from SMSC.
@@ -422,6 +436,36 @@ func (c *Client) enquireLinkLoop() {
 }
 
 // handleDisconnect marks the client as unbound after an unexpected disconnection.
+func (c *Client) startDeliverLoop() {
+	go func(done <-chan struct{}, q <-chan deliverMessage) {
+		for {
+			select {
+			case <-done:
+				return
+			case msg := <-q:
+				if c.handler != nil {
+					c.handler(msg.sourceAddr, msg.destAddr, msg.esmClass, msg.payload)
+				}
+			}
+		}
+	}(c.done, c.deliverQ)
+}
+
+func (c *Client) enqueueDeliver(msg deliverMessage) {
+	select {
+	case <-c.done:
+		return
+	case c.deliverQ <- msg:
+	default:
+		c.logger.Warn("deliver queue full, blocking until capacity frees")
+		select {
+		case <-c.done:
+			return
+		case c.deliverQ <- msg:
+		}
+	}
+}
+
 func (c *Client) handleDisconnect() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

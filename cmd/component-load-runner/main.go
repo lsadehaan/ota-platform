@@ -81,6 +81,7 @@ func main() {
 		brokersCSV = flag.String("kafka-brokers", getenv("COMPONENT_KAFKA_BROKERS", "kafka:9092"), "comma-separated kafka brokers")
 		promURL    = flag.String("prom-url", getenv("COMPONENT_PROM_URL", "http://prometheus:9090"), "Prometheus base URL")
 		cards      = flag.Int("cards", getenvInt("COMPONENT_CARD_COUNT", 5000), "card count for planner/executor")
+		expectResp = flag.Bool("expect-response", true, "whether planner/executor campaigns require a PoR/MO response")
 		messages   = flag.Int("messages", getenvInt("COMPONENT_MESSAGE_COUNT", 10000), "message count for gateway/projector")
 		timeout    = flag.Duration("timeout", getenvDuration("COMPONENT_TIMEOUT", 10*time.Minute), "component timeout")
 		output     = flag.String("output", "", "optional markdown report path")
@@ -100,9 +101,9 @@ func main() {
 	var err error
 	switch *component {
 	case "planner":
-		res, err = runPlanner(ctx, client, brokers, *cards)
+		res, err = runPlanner(ctx, client, brokers, *cards, *expectResp)
 	case "executor":
-		res, err = runExecutor(ctx, client, brokers, *cards)
+		res, err = runExecutor(ctx, client, brokers, *cards, *expectResp)
 	case "gateway":
 		res, err = runGateway(ctx, brokers, *messages)
 	case "projector":
@@ -123,7 +124,7 @@ func main() {
 	fmt.Print(report)
 }
 
-func runPlanner(ctx context.Context, client *apiClient, brokers []string, count int) (result, error) {
+func runPlanner(ctx context.Context, client *apiClient, brokers []string, count int, expectResp bool) (result, error) {
 	prefix := fmt.Sprintf("planner-%d", time.Now().UnixNano())
 	profileID, appID, err := createProfileAndApplication(client, prefix)
 	if err != nil {
@@ -136,7 +137,7 @@ func runPlanner(ctx context.Context, client *apiClient, brokers []string, count 
 	if err != nil {
 		return result{}, err
 	}
-	campaignID, err := createCampaign(client, prefix, appID, cardIDs, false)
+	campaignID, err := createCampaign(client, prefix, appID, cardIDs, false, expectResp)
 	if err != nil {
 		return result{}, err
 	}
@@ -164,7 +165,7 @@ func runPlanner(ctx context.Context, client *apiClient, brokers []string, count 
 	return result{Component: "planner", InputCount: count, OutputCount: counter.Count(), Elapsed: elapsed, TPS: float64(count) / elapsed.Seconds(), Notes: []string{"measured from start endpoint to card.activate publication"}}, nil
 }
 
-func runExecutor(ctx context.Context, client *apiClient, brokers []string, count int) (result, error) {
+func runExecutor(ctx context.Context, client *apiClient, brokers []string, count int, expectResp bool) (result, error) {
 	prefix := fmt.Sprintf("executor-%d", time.Now().UnixNano())
 	profileID, appID, err := createProfileAndApplication(client, prefix)
 	if err != nil {
@@ -177,7 +178,7 @@ func runExecutor(ctx context.Context, client *apiClient, brokers []string, count
 	if err != nil {
 		return result{}, err
 	}
-	campaignID, err := createCampaign(client, prefix, appID, cardIDs, false)
+	campaignID, err := createCampaign(client, prefix, appID, cardIDs, false, expectResp)
 	if err != nil {
 		return result{}, err
 	}
@@ -539,8 +540,8 @@ func listCardIDsByPrefix(client *apiClient, prefix string, expected int) ([]stri
 	return ids[:expected], nil
 }
 
-func createCampaign(client *apiClient, prefix, appID string, cardIDs []string, startImmediately bool) (string, error) {
-	body := map[string]any{"name": prefix + "-campaign", "campaign_type": "script", "card_ids": cardIDs, "max_retries": 1, "start_immediately": startImmediately, "commands": []map[string]any{{"application_id": appID, "script": "A0CA000000", "sequence": 1, "expect_response": true}}}
+func createCampaign(client *apiClient, prefix, appID string, cardIDs []string, startImmediately bool, expectResp bool) (string, error) {
+	body := map[string]any{"name": prefix + "-campaign", "campaign_type": "script", "card_ids": cardIDs, "max_retries": 1, "start_immediately": startImmediately, "commands": []map[string]any{{"application_id": appID, "script": "A0CA000000", "sequence": 1, "expect_response": expectResp}}}
 	var resp campaignCreateEnvelope
 	if err := postJSON(client, "/api/v1/campaigns", body, http.StatusCreated, &resp); err != nil {
 		return "", err

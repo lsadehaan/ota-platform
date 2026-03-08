@@ -85,14 +85,16 @@ func TestLocalStackCampaignLifecycle(t *testing.T) {
 	}
 	cardCount := getenvInt("E2E_CARD_COUNT", 50)
 	campaignTimeout := getenvDuration("E2E_CAMPAIGN_TIMEOUT", 2*time.Minute)
+	expectResponse := getenvBool("E2E_EXPECT_RESPONSE", true)
+	porProtocol := getenv("E2E_POR_PROTOCOL", "SMS_SUBMIT")
 	if err := waitForHealthy(client, 2*time.Minute); err != nil {
 		t.Fatalf("wait for stack health: %v", err)
 	}
 
 	prefix := fmt.Sprintf("e2e-%d", time.Now().UnixNano())
-	profileID, appID := createProfileAndApplication(t, client, prefix)
+	profileID, appID := createProfileAndApplication(t, client, prefix, porProtocol)
 	cardIDs := createCards(t, client, prefix, profileID, cardCount)
-	campaignID := createCampaign(t, client, prefix, appID, cardIDs)
+	campaignID := createCampaign(t, client, prefix, appID, cardIDs, expectResponse)
 
 	wallStart := time.Now()
 	campaign := waitForCampaignTerminal(t, client, campaignID, campaignTimeout)
@@ -147,7 +149,7 @@ func waitForHealthy(client *apiClient, timeout time.Duration) error {
 	return fmt.Errorf("timeout waiting for health")
 }
 
-func createProfileAndApplication(t *testing.T, client *apiClient, prefix string) (string, string) {
+func createProfileAndApplication(t *testing.T, client *apiClient, prefix, porProtocol string) (string, string) {
 	t.Helper()
 	body := map[string]any{
 		"name":           prefix + "-profile",
@@ -166,7 +168,7 @@ func createProfileAndApplication(t *testing.T, client *apiClient, prefix string)
 			"ciphered":           true,
 			"counter_mode":       "COUNTER_REPLAY_OR_CHECK",
 			"por_mode":           "REPLY_ALWAYS",
-			"por_protocol":       "SMS_SUBMIT",
+			"por_protocol":       porProtocol,
 			"por_ciphered":       false,
 			"por_cert_mode":      "NO_SECURITY",
 		}},
@@ -300,7 +302,7 @@ func listCardIDsByPrefix(t *testing.T, client *apiClient, prefix string, expecte
 	return ids[:expected], nil
 }
 
-func createCampaign(t *testing.T, client *apiClient, prefix, appID string, cardIDs []string) string {
+func createCampaign(t *testing.T, client *apiClient, prefix, appID string, cardIDs []string, expectResponse bool) string {
 	t.Helper()
 	body := map[string]any{
 		"name":              prefix + "-campaign",
@@ -312,7 +314,7 @@ func createCampaign(t *testing.T, client *apiClient, prefix, appID string, cardI
 			"application_id":  appID,
 			"script":          "A0CA000000",
 			"sequence":        1,
-			"expect_response": true,
+			"expect_response": expectResponse,
 		}},
 	}
 	var resp campaignCreateEnvelope
@@ -442,6 +444,18 @@ func getenvInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
 			return parsed
+		}
+	}
+	return fallback
+}
+
+func getenvBool(key string, fallback bool) bool {
+	if v := os.Getenv(key); v != "" {
+		switch v {
+		case "1", "true", "TRUE", "yes", "YES":
+			return true
+		case "0", "false", "FALSE", "no", "NO":
+			return false
 		}
 	}
 	return fallback
