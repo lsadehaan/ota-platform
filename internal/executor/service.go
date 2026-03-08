@@ -18,8 +18,6 @@ type CoordinationStore interface {
 	AcquireThrottle(ctx context.Context, campaignID string, ratePerSec int) (bool, error)
 	SetCardState(ctx context.Context, cardID string, state *redispkg.CardState) error
 	GetCardState(ctx context.Context, cardID string) (*redispkg.CardState, error)
-	UpdateProgress(ctx context.Context, campaignID, fromStatus, toStatus string) (*redispkg.CampaignProgress, error)
-	GetProgress(ctx context.Context, campaignID string) (*redispkg.CampaignProgress, error)
 	GetCachedProfile(ctx context.Context, profileID string, out interface{}) error
 	CacheProfile(ctx context.Context, profileID string, profile interface{}) error
 	GetCachedCampaignParams(ctx context.Context, campaignID string) (*redispkg.CampaignParams, error)

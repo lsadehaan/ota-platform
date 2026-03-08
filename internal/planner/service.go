@@ -3,6 +3,8 @@ package planner
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -56,13 +58,31 @@ func NewService(database *gorm.DB, publisher Publisher, logger *zap.Logger) *Ser
 		db:              database,
 		publisher:       publisher,
 		logger:          logger,
-		pollInterval:    100 * time.Millisecond,
-		batchSize:       100,
+		pollInterval:    plannerPollInterval(),
+		batchSize:       plannerClaimBatchSize(),
 		tracer:          otel.Tracer("campaign-planner"),
 		shardsClaimed:   shardsClaimed,
 		shardsPublished: shardsPublished,
 		publishDuration: publishDuration,
 	}
+}
+
+func plannerPollInterval() time.Duration {
+	if v := os.Getenv("PLANNER_POLL_INTERVAL_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	return 25 * time.Millisecond
+}
+
+func plannerClaimBatchSize() int {
+	if v := os.Getenv("PLANNER_CLAIM_BATCH_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 1000
 }
 
 func (s *Service) Run(ctx context.Context) {

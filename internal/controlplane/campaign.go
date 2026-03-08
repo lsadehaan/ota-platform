@@ -10,13 +10,22 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"ota-platform/internal/config"
 	"ota-platform/internal/db"
 	kafkapkg "ota-platform/internal/kafka"
 	redispkg "ota-platform/internal/redis"
 	"ota-platform/pkg/gsm0348"
 )
 
-const campaignShardSize = 100
+const defaultCampaignShardSize = 1000
+
+func campaignShardSize() int {
+	size := config.GetEnvInt("CAMPAIGN_SHARD_SIZE", defaultCampaignShardSize)
+	if size <= 0 {
+		return defaultCampaignShardSize
+	}
+	return size
+}
 
 // CampaignService orchestrates campaign lifecycle: starting, pausing, resuming,
 // and aborting campaigns. Card-level processing (OTA command building, DLR/MO
@@ -103,7 +112,8 @@ func (cs *CampaignService) StartCampaign(ctx context.Context, campaignID uuid.UU
 		}
 
 		shardSequence := 1
-		if err := cs.forEachCampaignTargetBatch(ctx, tx, campaignID, campaignShardSize, func(batch []uuid.UUID) error {
+		shardSize := campaignShardSize()
+		if err := cs.forEachCampaignTargetBatch(ctx, tx, campaignID, shardSize, func(batch []uuid.UUID) error {
 			pendingCards += len(batch)
 
 			events := make([]kafkapkg.CardEvent, 0, len(batch))
@@ -148,7 +158,7 @@ func (cs *CampaignService) StartCampaign(ctx context.Context, campaignID uuid.UU
 	}
 
 	if cs.query != nil {
-		if err := cs.forEachCampaignTargetBatch(ctx, cs.db.WithContext(ctx), campaignID, campaignShardSize, func(batch []uuid.UUID) error {
+		if err := cs.forEachCampaignTargetBatch(ctx, cs.db.WithContext(ctx), campaignID, campaignShardSize(), func(batch []uuid.UUID) error {
 			if err := cs.query.InitializeCampaign(ctx, campaignID, batch, firstStep, now); err != nil {
 				return fmt.Errorf("initialize campaign query state: %w", err)
 			}
@@ -158,13 +168,10 @@ func (cs *CampaignService) StartCampaign(ctx context.Context, campaignID uuid.UU
 		}
 	}
 
-	// 4. Initialize progress in Redis
+	// 4. Cache campaign status in the coordination store
 	if cs.redis != nil {
 		if err := cs.redis.SetCampaignStatus(ctx, campaignID.String(), "running"); err != nil {
 			cs.logger.Warn("failed to set campaign status in Redis", zap.Error(err))
-		}
-		if err := cs.redis.InitProgress(ctx, campaignID.String(), int64(pendingCards)); err != nil {
-			cs.logger.Warn("failed to init progress in Redis", zap.Error(err))
 		}
 	}
 
@@ -305,9 +312,10 @@ func (cs *CampaignService) ResumeCampaign(ctx context.Context, campaignID uuid.U
 				return fmt.Errorf("load last campaign shard sequence: %w", err)
 			}
 
-			shards := make([]db.CampaignShard, 0, (len(shardEvents)+campaignShardSize-1)/campaignShardSize)
-			for i, seq := 0, lastSequence+1; i < len(shardEvents); i, seq = i+campaignShardSize, seq+1 {
-				end := i + campaignShardSize
+			shardSize := campaignShardSize()
+			shards := make([]db.CampaignShard, 0, (len(shardEvents)+shardSize-1)/shardSize)
+			for i, seq := 0, lastSequence+1; i < len(shardEvents); i, seq = i+shardSize, seq+1 {
+				end := i + shardSize
 				if end > len(shardEvents) {
 					end = len(shardEvents)
 				}
@@ -413,7 +421,7 @@ func (cs *CampaignService) AbortCampaign(ctx context.Context, campaignID uuid.UU
 
 func (cs *CampaignService) forEachCampaignTargetBatch(ctx context.Context, dbtx *gorm.DB, campaignID uuid.UUID, batchSize int, fn func([]uuid.UUID) error) error {
 	if batchSize <= 0 {
-		batchSize = campaignShardSize
+		batchSize = campaignShardSize()
 	}
 
 	type targetRow struct {

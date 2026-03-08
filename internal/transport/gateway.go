@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel/attribute"
 	"go.uber.org/zap"
 
@@ -53,7 +54,9 @@ func NewGateway(smppConfig smpp.Config, poolConfig smpp.PoolConfig, kafkaBrokers
 	}
 
 	// Create Kafka producer for card-events topic
-	s.eventProducer = kafkapkg.NewProducer(kafkaBrokers, cardEventsTopic, logger.Named("event-producer"))
+	s.eventProducer = kafkapkg.NewProducerWithOptions(kafkaBrokers, cardEventsTopic, kafkapkg.ProducerOptions{
+		RequiredAcks: kafka.RequireAll,
+	}, logger.Named("event-producer"))
 
 	// Create SMPP pool with deliver handler
 	handler := func(sourceAddr string, destAddr string, esmClass byte, payload []byte) {

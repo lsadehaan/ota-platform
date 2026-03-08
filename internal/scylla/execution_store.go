@@ -224,6 +224,33 @@ func (s *ExecutionStore) CompleteCampaignIfRunning(ctx context.Context, campaign
 	return result.RowsAffected > 0, nil
 }
 
+func (s *ExecutionStore) CampaignStats(ctx context.Context, campaignID string) (CampaignStats, error) {
+	campaignUUID, err := gocql.ParseUUID(campaignID)
+	if err != nil {
+		return CampaignStats{}, fmt.Errorf("parse campaign_id: %w", err)
+	}
+
+	iter := s.client.Session().Query(
+		`SELECT pending, in_progress, completed, failed, skipped FROM campaign_progress_by_bucket WHERE campaign_id = ?`,
+		campaignUUID,
+	).WithContext(ctx).Iter()
+
+	var stats CampaignStats
+	var pending, inProgress, completed, failed, skipped int64
+	for iter.Scan(&pending, &inProgress, &completed, &failed, &skipped) {
+		stats.Pending += pending
+		stats.InProgress += inProgress
+		stats.Completed += completed
+		stats.Failed += failed
+		stats.Skipped += skipped
+	}
+	if err := iter.Close(); err != nil {
+		return CampaignStats{}, err
+	}
+	stats.Total = stats.Pending + stats.InProgress + stats.Completed + stats.Failed + stats.Skipped
+	return stats, nil
+}
+
 func counterColumn(status string) string {
 	switch status {
 	case "pending", "activating":

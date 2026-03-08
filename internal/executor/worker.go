@@ -19,6 +19,7 @@ import (
 	kafkapkg "ota-platform/internal/kafka"
 	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
+	scyllastore "ota-platform/internal/scylla"
 	"ota-platform/pkg/gsm0348"
 	"ota-platform/pkg/hexutil"
 	"ota-platform/pkg/smsframe"
@@ -228,28 +229,20 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 		}
 	}
 
-	// 12. Create MessageLog entry by publishing to message-log topic (async).
+	// 12. Build MessageLog entry payload.
 	counterHex := hex.EncodeToString(counter[:])
 	msgID := uuid.New()
 	createdAt := time.Now().UTC()
-
-	logAction := kafkapkg.MessageLogAction{
-		Action: "create",
-		Log: &kafkapkg.MessageLogEntry{
-			ID:             msgID.String(),
-			CampaignID:     event.CampaignID,
-			CardID:         event.CardID,
-			Direction:      "MT",
-			CreatedAt:      createdAt.Format(time.RFC3339Nano),
-			UpdatedAt:      createdAt.Format(time.RFC3339Nano),
-			RawPayload:     base64.StdEncoding.EncodeToString(cmd.Script),
-			SecuredPayload: base64.StdEncoding.EncodeToString(packet),
-			CounterHex:     counterHex,
-			Status:         "sending",
-		},
-	}
-	if err := w.logProducer.Publish(ctx, event.CardID, logAction); err != nil {
-		w.logger.Warn("failed to publish message log create", zap.Error(err))
+	logEntry := &kafkapkg.MessageLogEntry{
+		ID:             msgID.String(),
+		CampaignID:     event.CampaignID,
+		CardID:         event.CardID,
+		Direction:      "MT",
+		CreatedAt:      createdAt.Format(time.RFC3339Nano),
+		UpdatedAt:      createdAt.Format(time.RFC3339Nano),
+		RawPayload:     base64.StdEncoding.EncodeToString(cmd.Script),
+		SecuredPayload: base64.StdEncoding.EncodeToString(packet),
+		CounterHex:     counterHex,
 	}
 
 	// 13. Build SendSMSMessage and publish to send-sms topic.
@@ -277,14 +270,28 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 	}
 
 	if err := w.smsProducer.Publish(ctx, event.CardID, smsMsg); err != nil {
-		// Update message log status to failed via log producer.
-		failUpdate := kafkapkg.MessageLogAction{
-			Action:  "update",
-			ID:      msgID.String(),
-			Updates: map[string]interface{}{"status": "send_failed"},
+		failCreate := kafkapkg.MessageLogAction{
+			Action: "create",
+			Log: func() *kafkapkg.MessageLogEntry {
+				entry := *logEntry
+				entry.Status = "send_failed"
+				return &entry
+			}(),
 		}
-		_ = w.logProducer.Publish(ctx, event.CardID, failUpdate)
+		_ = w.logProducer.Publish(ctx, event.CardID, failCreate)
 		return fmt.Errorf("publish SMS to kafka: %w", err)
+	}
+
+	successCreate := kafkapkg.MessageLogAction{
+		Action: "create",
+		Log: func() *kafkapkg.MessageLogEntry {
+			entry := *logEntry
+			entry.Status = "sent"
+			return &entry
+		}(),
+	}
+	if err := w.logProducer.Publish(ctx, event.CardID, successCreate); err != nil {
+		w.logger.Warn("failed to publish message log create", zap.Error(err))
 	}
 
 	// 14. Update card state in Redis.
@@ -299,9 +306,6 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 		w.logger.Warn("failed to set card state in redis", zap.Error(err))
 	}
 
-	// 15. Update campaign progress: pending -> in_progress.
-	progress, _ := w.redis.UpdateProgress(ctx, event.CampaignID, "pending", "in_progress")
-
 	// Update DB campaign card record.
 	if w.execution != nil {
 		if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
@@ -314,14 +318,6 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 			w.logger.Warn("failed to persist in-progress campaign card state", zap.Error(err))
 		}
 	}
-
-	// Update message log status to sent.
-	sentUpdate := kafkapkg.MessageLogAction{
-		Action:  "update",
-		ID:      msgID.String(),
-		Updates: map[string]interface{}{"status": "sent"},
-	}
-	_ = w.logProducer.Publish(ctx, event.CardID, sentUpdate)
 
 	// 16. Broadcast WebSocket event.
 	if w.wsHub != nil {
@@ -346,8 +342,6 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 		zap.Int("parts", len(parts)),
 		zap.String("msg_id", msgID.String()),
 	)
-
-	_ = progress // used above for UpdateProgress call
 	return nil
 }
 
@@ -439,7 +433,6 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 			w.logger.Warn("failed to set card state to failed after partial submit", zap.Error(err))
 		}
 
-		w.redis.UpdateProgress(ctx, event.CampaignID, "in_progress", "failed")
 		if w.execution != nil {
 			if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
 				"status":     "failed",
@@ -513,8 +506,6 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 		}); err != nil {
 			w.logger.Warn("failed to set card state to failed", zap.Error(err))
 		}
-
-		w.redis.UpdateProgress(ctx, event.CampaignID, "in_progress", "failed")
 
 		if w.execution != nil {
 			if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
@@ -712,8 +703,6 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 		w.logger.Warn("failed to set card state to failed", zap.Error(err))
 	}
 
-	w.redis.UpdateProgress(ctx, event.CampaignID, "in_progress", "failed")
-
 	if w.execution != nil {
 		if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
 			"status":     "failed",
@@ -766,8 +755,6 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 			CampaignID: event.CampaignID,
 			Status:     "completed",
 		})
-		w.redis.UpdateProgress(ctx, event.CampaignID, "in_progress", "completed")
-
 		// Update DB.
 		if w.execution != nil {
 			if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{"status": "completed", "updated_at": time.Now()}); err != nil {
@@ -810,29 +797,37 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 
 // checkCampaignComplete checks if all cards are done and updates campaign status.
 func (w *CardWorker) checkCampaignComplete(ctx context.Context, campaignID string) {
-	progress, err := w.redis.GetProgress(ctx, campaignID)
-	if err != nil || progress == nil {
+	if w.execution == nil {
 		return
 	}
 
-	if progress.Pending > 0 || progress.InProgress > 0 {
+	stats, err := w.execution.CampaignStats(ctx, campaignID)
+	if err != nil {
+		w.logger.Warn("failed to load campaign stats for completion check",
+			zap.String("campaign_id", campaignID),
+			zap.Error(err),
+		)
 		return
 	}
 
-	w.completeCampaign(ctx, campaignID, progress)
+	if stats.Pending > 0 || stats.InProgress > 0 {
+		return
+	}
+
+	w.completeCampaign(ctx, campaignID, stats)
 }
 
 // completeCampaign determines the final status and persists campaign completion.
-func (w *CardWorker) completeCampaign(ctx context.Context, campaignID string, progress *redispkg.CampaignProgress) {
+func (w *CardWorker) completeCampaign(ctx context.Context, campaignID string, stats scyllastore.CampaignStats) {
 	// Use a short-lived derived context so completion writes finish
 	// even if parent is near cancellation, but don't hang forever.
 	completeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	var finalStatus string
-	if progress.Failed > 0 && progress.Completed == 0 {
+	if stats.Failed > 0 && stats.Completed == 0 {
 		finalStatus = "failed"
-	} else if progress.Failed > 0 {
+	} else if stats.Failed > 0 {
 		finalStatus = "completed_with_errors"
 	} else {
 		finalStatus = "completed"
@@ -865,8 +860,8 @@ func (w *CardWorker) completeCampaign(ctx context.Context, campaignID string, pr
 			Data: map[string]interface{}{
 				"status":       finalStatus,
 				"completed_at": now,
-				"completed":    progress.Completed,
-				"failed":       progress.Failed,
+				"completed":    stats.Completed,
+				"failed":       stats.Failed,
 			},
 		})
 	}
@@ -874,8 +869,8 @@ func (w *CardWorker) completeCampaign(ctx context.Context, campaignID string, pr
 	w.logger.Info("campaign completed",
 		zap.String("campaign_id", campaignID),
 		zap.String("final_status", finalStatus),
-		zap.Int64("completed_cards", progress.Completed),
-		zap.Int64("failed_cards", progress.Failed),
+		zap.Int64("completed_cards", stats.Completed),
+		zap.Int64("failed_cards", stats.Failed),
 	)
 }
 

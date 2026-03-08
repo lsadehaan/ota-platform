@@ -16,6 +16,7 @@ import (
 	kafkapkg "ota-platform/internal/kafka"
 	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
+	scyllastore "ota-platform/internal/scylla"
 	"ota-platform/internal/smpp"
 	"ota-platform/internal/transport"
 )
@@ -118,12 +119,6 @@ func (s *pipelineCoordinationStore) GetCardState(_ context.Context, cardID strin
 	copied := *state
 	return &copied, nil
 }
-func (s *pipelineCoordinationStore) UpdateProgress(context.Context, string, string, string) (*redispkg.CampaignProgress, error) {
-	return &redispkg.CampaignProgress{}, nil
-}
-func (s *pipelineCoordinationStore) GetProgress(context.Context, string) (*redispkg.CampaignProgress, error) {
-	return &redispkg.CampaignProgress{}, nil
-}
 func (s *pipelineCoordinationStore) GetCachedProfile(_ context.Context, _ string, out interface{}) error {
 	if profile, ok := out.(*db.Profile); ok {
 		*profile = s.profile
@@ -183,6 +178,9 @@ func (pipelineExecutionStore) UpdateCampaignCard(context.Context, string, string
 }
 func (pipelineExecutionStore) CompleteCampaignIfRunning(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
+}
+func (pipelineExecutionStore) CampaignStats(context.Context, string) (scyllastore.CampaignStats, error) {
+	return scyllastore.CampaignStats{}, nil
 }
 
 type pipelineSMPPClient struct{}

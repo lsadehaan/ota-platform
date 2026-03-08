@@ -11,10 +11,27 @@ import (
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 
+	"ota-platform/internal/config"
 	"ota-platform/internal/observability"
 )
 
 const maxRetries = 3
+
+func consumerMaxWait() time.Duration {
+	ms := config.GetEnvInt("KAFKA_CONSUMER_MAX_WAIT_MS", 50)
+	if ms <= 0 {
+		ms = 50
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func consumerQueueCapacity() int {
+	n := config.GetEnvInt("KAFKA_CONSUMER_QUEUE_CAPACITY", 10000)
+	if n <= 0 {
+		n = 10000
+	}
+	return n
+}
 
 // MessageHandler is called for each consumed message. Returning a non-nil error
 // causes the consumer to retry inline before the message is treated as a poison pill.
@@ -32,11 +49,13 @@ type Consumer struct {
 // NewConsumer creates a new Kafka consumer that joins the specified consumer group.
 func NewConsumer(brokers []string, topic string, groupID string, handler MessageHandler, logger *zap.Logger) *Consumer {
 	r := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:  brokers,
-		Topic:    topic,
-		GroupID:  groupID,
-		MinBytes: 1,
-		MaxBytes: 10e6, // 10 MB
+		Brokers:       brokers,
+		Topic:         topic,
+		GroupID:       groupID,
+		MinBytes:      1,
+		MaxBytes:      10e6, // 10 MB
+		MaxWait:       consumerMaxWait(),
+		QueueCapacity: consumerQueueCapacity(),
 	})
 	return &Consumer{
 		reader:  r,
@@ -164,6 +183,8 @@ func NewConcurrentConsumer(brokers []string, topic, groupID string, workers int,
 		GroupID:        groupID,
 		MinBytes:       1,
 		MaxBytes:       10e6,
+		MaxWait:        consumerMaxWait(),
+		QueueCapacity:  consumerQueueCapacity(),
 		CommitInterval: 0, // manual commits only
 		StartOffset:    kafka.FirstOffset,
 	})

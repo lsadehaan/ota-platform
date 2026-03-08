@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 
 	"ota-platform/internal/bootstrap"
@@ -27,7 +28,9 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}()
 
 	database := bootstrap.MustGormDB(logger)
-	producer := kafkapkg.NewProducer(bootstrap.KafkaBrokers(), contractevents.TopicCardEvents, logger.Named("planner-producer"))
+	producer := kafkapkg.NewProducerWithOptions(bootstrap.KafkaBrokers(), contractevents.TopicCardEvents, kafkapkg.ProducerOptions{
+		RequiredAcks: kafka.RequireAll,
+	}, logger.Named("planner-producer"))
 	defer producer.Close()
 
 	service := NewService(database, producer, logger.Named("planner"))

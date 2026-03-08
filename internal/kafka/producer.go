@@ -9,6 +9,7 @@ import (
 	"github.com/segmentio/kafka-go"
 	"go.uber.org/zap"
 
+	"ota-platform/internal/config"
 	"ota-platform/internal/observability"
 )
 
@@ -25,10 +26,33 @@ type ProducerOptions struct {
 	BatchTimeout time.Duration
 }
 
+const (
+	defaultProducerBatchSize      = 1000
+	defaultProducerBatchTimeoutMS = 50
+)
+
+func producerBatchSize() int {
+	size := config.GetEnvInt("KAFKA_PRODUCER_BATCH_SIZE", defaultProducerBatchSize)
+	if size <= 0 {
+		return defaultProducerBatchSize
+	}
+	return size
+}
+
+func producerBatchTimeout() time.Duration {
+	ms := config.GetEnvInt("KAFKA_PRODUCER_BATCH_TIMEOUT_MS", defaultProducerBatchTimeoutMS)
+	if ms <= 0 {
+		ms = defaultProducerBatchTimeoutMS
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
 // NewProducer creates a new Kafka producer for the given topic.
 func NewProducer(brokers []string, topic string, logger *zap.Logger) *Producer {
 	return NewProducerWithOptions(brokers, topic, ProducerOptions{
 		RequiredAcks: kafka.RequireAll,
+		BatchSize:    producerBatchSize(),
+		BatchTimeout: producerBatchTimeout(),
 	}, logger)
 }
 
@@ -36,6 +60,12 @@ func NewProducer(brokers []string, topic string, logger *zap.Logger) *Producer {
 func NewProducerWithOptions(brokers []string, topic string, opts ProducerOptions, logger *zap.Logger) *Producer {
 	if opts.RequiredAcks == 0 {
 		opts.RequiredAcks = kafka.RequireAll
+	}
+	if opts.BatchSize <= 0 {
+		opts.BatchSize = producerBatchSize()
+	}
+	if opts.BatchTimeout <= 0 {
+		opts.BatchTimeout = producerBatchTimeout()
 	}
 	w := &kafka.Writer{
 		Addr:         kafka.TCP(brokers...),

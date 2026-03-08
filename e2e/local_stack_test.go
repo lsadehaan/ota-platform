@@ -221,7 +221,10 @@ func waitForCampaignTerminal(t *testing.T, client *apiClient, campaignID string,
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		var campaign campaignDetail
-		getJSON(t, client, "/api/v1/campaigns/"+campaignID, http.StatusOK, &campaign)
+		if err := getJSONE(client, "/api/v1/campaigns/"+campaignID, http.StatusOK, &campaign); err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
 		if campaign.TotalCards > 0 && campaign.SuccessCards+campaign.FailedCards >= campaign.TotalCards && campaign.PendingCards == 0 && campaign.InProgress == 0 {
 			return campaign
 		}
@@ -239,7 +242,10 @@ func getCampaignThroughput(t *testing.T, client *apiClient, campaignID string, e
 	deadline := time.Now().Add(20 * time.Second)
 	for time.Now().Before(deadline) {
 		var resp throughputEnvelope
-		getJSON(t, client, "/api/v1/dashboard/sms-throughput?campaign_id="+campaignID, http.StatusOK, &resp)
+		if err := getJSONE(client, "/api/v1/dashboard/sms-throughput?campaign_id="+campaignID, http.StatusOK, &resp); err != nil {
+			time.Sleep(500 * time.Millisecond)
+			continue
+		}
 		var sent, delivered, failed int64
 		for _, point := range resp.Data {
 			sent += point.Sent
@@ -277,29 +283,42 @@ func postJSON(t *testing.T, client *apiClient, path string, body any, wantStatus
 
 func getJSON(t *testing.T, client *apiClient, path string, wantStatus int, out any) {
 	t.Helper()
-	resp, err := client.http.Get(client.baseURL + path)
-	if err != nil {
+	if err := getJSONE(client, path, wantStatus, out); err != nil {
 		t.Fatalf("get %s: %v", path, err)
 	}
+}
+
+func getJSONE(client *apiClient, path string, wantStatus int, out any) error {
+	resp, err := client.http.Get(client.baseURL + path)
+	if err != nil {
+		return err
+	}
 	defer resp.Body.Close()
-	decodeResponse(t, resp, wantStatus, out)
+	return decodeResponseE(resp, wantStatus, out)
 }
 
 func decodeResponse(t *testing.T, resp *http.Response, wantStatus int, out any) {
 	t.Helper()
+	if err := decodeResponseE(resp, wantStatus, out); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func decodeResponseE(resp *http.Response, wantStatus int, out any) error {
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		t.Fatalf("read response body: %v", err)
+		return fmt.Errorf("read response body: %w", err)
 	}
 	if resp.StatusCode != wantStatus {
-		t.Fatalf("unexpected status %d want %d body=%s", resp.StatusCode, wantStatus, string(body))
+		return fmt.Errorf("unexpected status %d want %d body=%s", resp.StatusCode, wantStatus, string(body))
 	}
 	if out == nil {
-		return
+		return nil
 	}
 	if err := json.Unmarshal(body, out); err != nil {
-		t.Fatalf("decode response: %v body=%s", err, string(body))
+		return fmt.Errorf("decode response: %w body=%s", err, string(body))
 	}
+	return nil
 }
 
 func getenv(key, fallback string) string {

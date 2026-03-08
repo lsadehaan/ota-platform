@@ -51,7 +51,7 @@ function getStatusBadge(status: CampaignStatus) {
 }
 
 function formatCampaignType(type: string) {
-  return type
+  return (type || "unknown")
     .split("_")
     .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
     .join(" ")

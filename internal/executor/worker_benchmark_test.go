@@ -12,6 +12,7 @@ import (
 	kafkapkg "ota-platform/internal/kafka"
 	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
+	scyllastore "ota-platform/internal/scylla"
 )
 
 type benchmarkKeyStore struct {
@@ -49,12 +50,6 @@ func (s *benchmarkCoordinationStore) SetCardState(context.Context, string, *redi
 func (s *benchmarkCoordinationStore) GetCardState(context.Context, string) (*redispkg.CardState, error) {
 	return nil, nil
 }
-func (s *benchmarkCoordinationStore) UpdateProgress(context.Context, string, string, string) (*redispkg.CampaignProgress, error) {
-	return &redispkg.CampaignProgress{}, nil
-}
-func (s *benchmarkCoordinationStore) GetProgress(context.Context, string) (*redispkg.CampaignProgress, error) {
-	return &redispkg.CampaignProgress{}, nil
-}
 func (s *benchmarkCoordinationStore) GetCachedProfile(_ context.Context, _ string, out interface{}) error {
 	if p, ok := out.(*db.Profile); ok {
 		*p = s.profile
@@ -89,6 +84,9 @@ func (benchmarkExecutionStore) UpdateCampaignCard(context.Context, string, strin
 }
 func (benchmarkExecutionStore) CompleteCampaignIfRunning(context.Context, string, string, time.Time) (bool, error) {
 	return false, nil
+}
+func (benchmarkExecutionStore) CampaignStats(context.Context, string) (scyllastore.CampaignStats, error) {
+	return scyllastore.CampaignStats{}, nil
 }
 
 func BenchmarkHandleActivate(b *testing.B) {

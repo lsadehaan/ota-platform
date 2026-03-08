@@ -17,7 +17,6 @@ import (
 type CoordinationStore interface {
 	CacheCampaignCommands(ctx context.Context, campaignID string, cmds []redispkg.CampaignCommandCache) error
 	SetCampaignStatus(ctx context.Context, campaignID, status string) error
-	InitProgress(ctx context.Context, campaignID string, totalCards int64) error
 }
 
 type QueryStore interface {

@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
+	"os"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,15 +25,22 @@ import (
 // LogWriter consumes message-log events from Kafka and batch-writes them to the configured durable store.
 type LogWriter struct {
 	store    MessageLogStore
-	consumer *kafkapkg.Consumer
+	consumer consumer
 	logger   *zap.Logger
 
-	incoming      chan kafkapkg.MessageLogAction
+	incoming      []chan kafkapkg.MessageLogAction
+	flushWorkers  int
 	batchSize     int
+	updateBatch   int
 	flushInterval time.Duration
 	tracer        trace.Tracer
 	actionsTotal  metric.Int64Counter
 	flushDuration metric.Float64Histogram
+}
+
+type consumer interface {
+	Start(ctx context.Context) error
+	Close() error
 }
 
 // NewLogWriter creates a new LogWriter that consumes from the message-log Kafka topic.
@@ -44,21 +54,52 @@ func NewLogWriter(store MessageLogStore, brokers []string, logger *zap.Logger) *
 	if err != nil {
 		logger.Warn("create projector flush_duration metric", zap.Error(err))
 	}
+	flushWorkers := envInt("PROJECTOR_FLUSH_WORKERS", 8)
+	if flushWorkers <= 0 {
+		flushWorkers = 8
+	}
+	batchSize := envInt("PROJECTOR_BATCH_SIZE", 2000)
+	if batchSize <= 0 {
+		batchSize = 2000
+	}
+	updateBatch := envInt("PROJECTOR_UPDATE_BATCH_SIZE", 2000)
+	if updateBatch <= 0 {
+		updateBatch = 2000
+	}
+	flushInterval := time.Duration(envInt("PROJECTOR_FLUSH_INTERVAL_MS", 100)) * time.Millisecond
+	if flushInterval <= 0 {
+		flushInterval = 100 * time.Millisecond
+	}
+
+	incoming := make([]chan kafkapkg.MessageLogAction, flushWorkers)
+	for i := range incoming {
+		incoming[i] = make(chan kafkapkg.MessageLogAction, batchSize*2)
+	}
+
 	lw := &LogWriter{
 		store:         store,
 		logger:        logger,
-		incoming:      make(chan kafkapkg.MessageLogAction, 5000),
-		batchSize:     500,
-		flushInterval: 100 * time.Millisecond,
+		incoming:      incoming,
+		flushWorkers:  flushWorkers,
+		batchSize:     batchSize,
+		updateBatch:   updateBatch,
+		flushInterval: flushInterval,
 		tracer:        otel.Tracer("read-model-projector"),
 		actionsTotal:  actionsTotal,
 		flushDuration: flushDuration,
 	}
 
-	lw.consumer = kafkapkg.NewConsumer(
+	workers := 16
+	if v := os.Getenv("PROJECTOR_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			workers = n
+		}
+	}
+	lw.consumer = kafkapkg.NewConcurrentConsumer(
 		brokers,
 		contractevents.TopicMessageLog,
 		"log-writers",
+		workers,
 		lw.handleMessage,
 		logger.Named("log-consumer"),
 	)
@@ -68,7 +109,9 @@ func NewLogWriter(store MessageLogStore, brokers []string, logger *zap.Logger) *
 
 // Start launches the consumer and batch writer goroutines.
 func (lw *LogWriter) Start(ctx context.Context) {
-	go lw.batchWriteLoop(ctx)
+	for i := 0; i < lw.flushWorkers; i++ {
+		go lw.batchWriteLoop(ctx, lw.incoming[i])
+	}
 
 	if err := lw.consumer.Start(ctx); err != nil {
 		lw.logger.Error("log writer consumer stopped", zap.Error(err))
@@ -90,8 +133,9 @@ func (lw *LogWriter) handleMessage(ctx context.Context, key []byte, value []byte
 		lw.actionsTotal.Add(ctx, 1)
 	}
 
+	shard := lw.shardForAction(action)
 	select {
-	case lw.incoming <- action:
+	case lw.incoming[shard] <- action:
 	case <-ctx.Done():
 		span.RecordError(ctx.Err())
 		span.SetStatus(codes.Error, ctx.Err().Error())
@@ -101,9 +145,9 @@ func (lw *LogWriter) handleMessage(ctx context.Context, key []byte, value []byte
 	return nil
 }
 
-func (lw *LogWriter) batchWriteLoop(ctx context.Context) {
-	creates := make([]db.MessageLog, 0, lw.batchSize)
-	updates := make([]kafkapkg.MessageLogAction, 0, 100)
+func (lw *LogWriter) batchWriteLoop(ctx context.Context, incoming <-chan kafkapkg.MessageLogAction) {
+	creates := make(map[string]db.MessageLog, lw.batchSize)
+	updates := make(map[string]kafkapkg.MessageLogAction, lw.updateBatch)
 	ticker := time.NewTicker(lw.flushInterval)
 	defer ticker.Stop()
 
@@ -113,16 +157,24 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context) {
 		}
 		started := time.Now()
 		if len(creates) > 0 {
-			if err := lw.store.CreateBatch(ctx, creates, lw.batchSize); err != nil {
-				lw.logger.Error("batch create message logs failed", zap.Int("count", len(creates)), zap.Error(err))
+			createSlice := make([]db.MessageLog, 0, len(creates))
+			for _, create := range creates {
+				createSlice = append(createSlice, create)
 			}
-			creates = creates[:0]
+			if err := lw.store.CreateBatch(ctx, createSlice, lw.batchSize); err != nil {
+				lw.logger.Error("batch create message logs failed", zap.Int("count", len(createSlice)), zap.Error(err))
+			}
+			clear(creates)
 		}
 		if len(updates) > 0 {
-			if err := lw.store.ApplyUpdates(ctx, updates); err != nil {
-				lw.logger.Error("batch update message logs failed", zap.Int("count", len(updates)), zap.Error(err))
+			updateSlice := make([]kafkapkg.MessageLogAction, 0, len(updates))
+			for _, update := range updates {
+				updateSlice = append(updateSlice, update)
 			}
-			updates = updates[:0]
+			if err := lw.store.ApplyUpdates(ctx, updateSlice); err != nil {
+				lw.logger.Error("batch update message logs failed", zap.Int("count", len(updateSlice)), zap.Error(err))
+			}
+			clear(updates)
 		}
 		if lw.flushDuration != nil {
 			lw.flushDuration.Record(ctx, float64(time.Since(started).Milliseconds()))
@@ -131,7 +183,7 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context) {
 
 	for {
 		select {
-		case action := <-lw.incoming:
+		case action := <-incoming:
 			switch action.Action {
 			case "create":
 				if action.Log != nil {
@@ -143,14 +195,29 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context) {
 						)
 						continue
 					}
-					creates = append(creates, ml)
+					if pending, ok := updates[action.Log.ID]; ok {
+						applyUpdatesToMessageLog(&ml, pending.Updates)
+						delete(updates, action.Log.ID)
+					}
+					creates[action.Log.ID] = ml
 					if len(creates) >= lw.batchSize {
 						flush()
 					}
 				}
 			case "update":
-				updates = append(updates, action)
-				if len(updates) >= 100 {
+				if action.ID == "" {
+					continue
+				}
+				if create, ok := creates[action.ID]; ok {
+					applyUpdatesToMessageLog(&create, action.Updates)
+					creates[action.ID] = create
+				} else if existing, ok := updates[action.ID]; ok {
+					existing.Updates = mergeUpdateMaps(existing.Updates, action.Updates)
+					updates[action.ID] = existing
+				} else {
+					updates[action.ID] = action
+				}
+				if len(updates) >= lw.updateBatch {
 					flush()
 				}
 			}
@@ -161,6 +228,99 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context) {
 			return
 		}
 	}
+}
+
+func (lw *LogWriter) shardForAction(action kafkapkg.MessageLogAction) int {
+	key := action.ID
+	if key == "" && action.Log != nil {
+		key = action.Log.ID
+	}
+	if key == "" || lw.flushWorkers <= 1 {
+		return 0
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(key))
+	return int(h.Sum32() % uint32(lw.flushWorkers))
+}
+
+func envInt(key string, fallback int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			return n
+		}
+	}
+	return fallback
+}
+
+func mergeUpdateMaps(dst, src map[string]interface{}) map[string]interface{} {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = make(map[string]interface{}, len(src))
+	}
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+func applyUpdatesToMessageLog(log *db.MessageLog, updates map[string]interface{}) {
+	if log == nil || len(updates) == 0 {
+		return
+	}
+	for key, value := range updates {
+		switch key {
+		case "status":
+			if v, ok := value.(string); ok {
+				log.Status = v
+			}
+		case "smpp_message_id":
+			switch v := value.(type) {
+			case string:
+				log.SMPPMessageID = &v
+			case *string:
+				log.SMPPMessageID = v
+			case nil:
+				log.SMPPMessageID = nil
+			}
+		case "dlr_status":
+			switch v := value.(type) {
+			case string:
+				log.DLRStatus = &v
+			case *string:
+				log.DLRStatus = v
+			case nil:
+				log.DLRStatus = nil
+			}
+		case "counter_hex":
+			switch v := value.(type) {
+			case string:
+				log.CounterHex = &v
+			case *string:
+				log.CounterHex = v
+			case nil:
+				log.CounterHex = nil
+			}
+		case "por_status_code":
+			switch v := value.(type) {
+			case int16:
+				log.PORStatusCode = &v
+			case *int16:
+				log.PORStatusCode = v
+			case nil:
+				log.PORStatusCode = nil
+			}
+		case "por_data":
+			switch v := value.(type) {
+			case []byte:
+				log.PORData = v
+			case string:
+				log.PORData = []byte(v)
+			}
+		}
+	}
+	log.UpdatedAt = time.Now().UTC()
 }
 
 func (lw *LogWriter) toMessageLog(entry *kafkapkg.MessageLogEntry) (db.MessageLog, error) {

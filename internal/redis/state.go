@@ -373,24 +373,11 @@ func (c *Client) GetCampaignCommands(ctx context.Context, campaignID string) ([]
 }
 
 // ---------------------------------------------------------------------------
-// Campaign Status + Progress
+// Campaign Status
 // ---------------------------------------------------------------------------
-
-// CampaignProgress holds the per-status card counts for a campaign.
-type CampaignProgress struct {
-	Pending    int64 `json:"pending"`
-	InProgress int64 `json:"in_progress"`
-	Completed  int64 `json:"completed"`
-	Failed     int64 `json:"failed"`
-	Skipped    int64 `json:"skipped"`
-}
 
 func campaignStatusKey(campaignID string) string {
 	return "campaign:" + campaignID + ":status"
-}
-
-func campaignProgressKey(campaignID string) string {
-	return "campaign:" + campaignID + ":progress"
 }
 
 // SetCampaignStatus stores the campaign status string with a 24-hour TTL.
@@ -415,76 +402,6 @@ func (c *Client) GetCampaignStatus(ctx context.Context, campaignID string) (stri
 		return "", err
 	}
 	return status, nil
-}
-
-// InitProgress initializes the campaign progress hash with the given total card count.
-func (c *Client) InitProgress(ctx context.Context, campaignID string, totalCards int64) error {
-	key := campaignProgressKey(campaignID)
-	fields := map[string]interface{}{
-		"pending":     totalCards,
-		"in_progress": 0,
-		"completed":   0,
-		"failed":      0,
-		"skipped":     0,
-	}
-
-	pipe := c.rdb.Pipeline()
-	pipe.HSet(ctx, key, fields)
-	pipe.Expire(ctx, key, 24*time.Hour)
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		c.logger.Warn("redis: failed to init progress", zap.String("campaign_id", campaignID), zap.Error(err))
-		return err
-	}
-	return nil
-}
-
-// UpdateProgress atomically decrements fromStatus and increments toStatus, then
-// returns the updated progress snapshot.
-func (c *Client) UpdateProgress(ctx context.Context, campaignID, fromStatus, toStatus string) (*CampaignProgress, error) {
-	key := campaignProgressKey(campaignID)
-
-	pipe := c.rdb.Pipeline()
-	pipe.HIncrBy(ctx, key, fromStatus, -1)
-	pipe.HIncrBy(ctx, key, toStatus, 1)
-	getAllCmd := pipe.HGetAll(ctx, key)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		c.logger.Warn("redis: failed to update progress",
-			zap.String("campaign_id", campaignID),
-			zap.String("from", fromStatus),
-			zap.String("to", toStatus),
-			zap.Error(err),
-		)
-		return nil, err
-	}
-
-	return parseProgress(getAllCmd.Val()), nil
-}
-
-// GetProgress retrieves the current campaign progress. Returns (nil, nil) if not found.
-func (c *Client) GetProgress(ctx context.Context, campaignID string) (*CampaignProgress, error) {
-	key := campaignProgressKey(campaignID)
-	result, err := c.rdb.HGetAll(ctx, key).Result()
-	if err != nil {
-		c.logger.Warn("redis: failed to get progress", zap.String("campaign_id", campaignID), zap.Error(err))
-		return nil, err
-	}
-	if len(result) == 0 {
-		return nil, nil
-	}
-	return parseProgress(result), nil
-}
-
-func parseProgress(m map[string]string) *CampaignProgress {
-	p := &CampaignProgress{}
-	p.Pending, _ = strconv.ParseInt(m["pending"], 10, 64)
-	p.InProgress, _ = strconv.ParseInt(m["in_progress"], 10, 64)
-	p.Completed, _ = strconv.ParseInt(m["completed"], 10, 64)
-	p.Failed, _ = strconv.ParseInt(m["failed"], 10, 64)
-	p.Skipped, _ = strconv.ParseInt(m["skipped"], 10, 64)
-	return p
 }
 
 // ---------------------------------------------------------------------------

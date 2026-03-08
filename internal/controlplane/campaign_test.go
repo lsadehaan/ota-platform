@@ -22,7 +22,6 @@ func (campaignTestStore) CacheCampaignCommands(context.Context, string, []redisp
 	return nil
 }
 func (campaignTestStore) SetCampaignStatus(context.Context, string, string) error { return nil }
-func (campaignTestStore) InitProgress(context.Context, string, int64) error       { return nil }
 
 type campaignTestQueryStore struct{}
 
@@ -255,6 +254,7 @@ func TestStartCampaignCreatesPlannerShards(t *testing.T) {
 }
 
 func TestStartCampaignStreamsTargetsIntoBatches(t *testing.T) {
+	shardSize := campaignShardSize()
 	database := openCampaignTestDB(t)
 
 	for _, stmt := range []string{
@@ -289,7 +289,7 @@ func TestStartCampaignStreamsTargetsIntoBatches(t *testing.T) {
 		commandID.String(), campaignID.String(), 1, appID.String(), []byte{0xA0}, true).Error; err != nil {
 		t.Fatalf("create command: %v", err)
 	}
-	for i := 0; i < campaignShardSize+23; i++ {
+	for i := 0; i < shardSize+23; i++ {
 		cardID := uuid.New()
 		if err := database.Exec(`INSERT INTO campaign_targets (campaign_id, card_id) VALUES (?, ?)`, campaignID.String(), cardID.String()).Error; err != nil {
 			t.Fatalf("create campaign target %d: %v", i, err)
@@ -305,8 +305,8 @@ func TestStartCampaignStreamsTargetsIntoBatches(t *testing.T) {
 	if queryStore.initializeCalls != 2 {
 		t.Fatalf("expected 2 initialize calls, got %d", queryStore.initializeCalls)
 	}
-	if queryStore.initializeCards != campaignShardSize+23 {
-		t.Fatalf("expected %d initialized cards, got %d", campaignShardSize+23, queryStore.initializeCards)
+	if queryStore.initializeCards != shardSize+23 {
+		t.Fatalf("expected %d initialized cards, got %d", shardSize+23, queryStore.initializeCards)
 	}
 
 	var shards []struct {
@@ -319,7 +319,7 @@ func TestStartCampaignStreamsTargetsIntoBatches(t *testing.T) {
 	if len(shards) != 2 {
 		t.Fatalf("expected 2 shards, got %d", len(shards))
 	}
-	if shards[0].ItemCount != campaignShardSize || shards[1].ItemCount != 23 {
+	if shards[0].ItemCount != shardSize || shards[1].ItemCount != 23 {
 		t.Fatalf("unexpected shard sizes: %+v", shards)
 	}
 }

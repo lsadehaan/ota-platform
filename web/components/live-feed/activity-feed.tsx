@@ -29,7 +29,7 @@ function formatTimestamp(ts: string): string {
   })
 }
 
-function getEventBadgeVariant(type: string): "default" | "secondary" | "destructive" | "outline" {
+function getEventBadgeVariant(type: string | undefined): "default" | "secondary" | "destructive" | "outline" {
   switch (type) {
     case "error":
     case "failed":
@@ -46,7 +46,7 @@ function getEventBadgeVariant(type: string): "default" | "secondary" | "destruct
 }
 
 function getEventLabel(type: string): string {
-  return type
+  return (type || "unknown")
     .replace(/_/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }

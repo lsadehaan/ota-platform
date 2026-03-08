@@ -37,18 +37,20 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	defer rdb.Close()
 
 	kafkaBrokers := bootstrap.KafkaBrokers()
-	smsProducer := kafkapkg.NewProducer(kafkaBrokers, contractevents.TopicSendSMS, logger.Named("sms-producer"))
+	smsProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicSendSMS, kafkapkg.ProducerOptions{
+		RequiredAcks: kafka.RequireAll,
+	}, logger.Named("sms-producer"))
 	defer smsProducer.Close()
 
 	logProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicMessageLog, kafkapkg.ProducerOptions{
 		RequiredAcks: kafka.RequireAll,
 		Async:        true,
-		BatchSize:    256,
-		BatchTimeout: 10 * time.Millisecond,
 	}, logger.Named("log-producer"))
 	defer logProducer.Close()
 
-	eventProducer := kafkapkg.NewProducer(kafkaBrokers, contractevents.TopicCardEvents, logger.Named("event-producer"))
+	eventProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicCardEvents, kafkapkg.ProducerOptions{
+		RequiredAcks: kafka.RequireAll,
+	}, logger.Named("event-producer"))
 	defer eventProducer.Close()
 
 	// Build keystore.
