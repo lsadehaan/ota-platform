@@ -44,9 +44,9 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	defer smsProducer.Close()
 
 	logProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicMessageLog, kafkapkg.ProducerOptions{
-		RequiredAcks:    kafka.RequireAll,
+		RequiredAcks:    kafka.RequireOne,
 		RequiredAcksSet: true,
-		Async:           false,
+		Async:           true,
 	}, logger.Named("log-producer"))
 	defer logProducer.Close()
 
