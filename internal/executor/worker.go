@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +40,15 @@ type CardWorker struct {
 	wsHub          WSHub
 	logger         *zap.Logger
 	telemetry      *executorTelemetry
+	cardKeyCache   sync.Map // cardID -> *keystore.CardKeyMaterial
+	profileCache   sync.Map // profileID -> *db.Profile
+	campaignCache  sync.Map // campaignID -> *campaignExecutionContext
+}
+
+type campaignExecutionContext struct {
+	commands      []redispkg.CampaignCommandCache
+	commandByStep map[int]*redispkg.CampaignCommandCache
+	params        *redispkg.CampaignParams
 }
 
 // NewCardWorker creates a new CardWorker.
@@ -119,25 +129,19 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 	}
 
 	// 2. Load card keys via keystore.
-	cardKeys, err := w.keyStore.GetKeys(ctx, event.CardID)
+	cardKeys, err := w.loadCardKeys(ctx, event.CardID)
 	if err != nil {
 		return fmt.Errorf("get card keys: %w", err)
 	}
 
-	// 3. Load campaign commands from Redis (or DB on miss).
-	commands, err := w.loadCampaignCommands(ctx, event.CampaignID)
+	// 3. Load campaign execution context from the process-local cache.
+	campaignCtx, err := w.loadCampaignContext(ctx, event.CampaignID)
 	if err != nil {
-		return fmt.Errorf("load campaign commands: %w", err)
+		return fmt.Errorf("load campaign context: %w", err)
 	}
 
 	// 4. Find the command matching event.Step.
-	var cmd *redispkg.CampaignCommandCache
-	for i := range commands {
-		if commands[i].Sequence == event.Step {
-			cmd = &commands[i]
-			break
-		}
-	}
+	cmd := campaignCtx.commandByStep[event.Step]
 	if cmd == nil {
 		return fmt.Errorf("no command found at sequence %d for campaign %s", event.Step, event.CampaignID)
 	}
@@ -190,10 +194,7 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 	bufferSize := profile.BufferSize
 	maxConcat := profile.MaxConcatSMS
 
-	campaignParams, err := w.loadCampaignParamsCached(ctx, event.CampaignID)
-	if err != nil {
-		return fmt.Errorf("load campaign params: %w", err)
-	}
+	campaignParams := campaignCtx.params
 	if campaignParams.MaxConcatOverride != nil {
 		maxConcat = *campaignParams.MaxConcatOverride
 	}
@@ -390,19 +391,12 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 	switch event.DLRStatus {
 	case "DELIVRD":
 		// Load campaign commands from cache.
-		commands, err := w.loadCampaignCommands(ctx, event.CampaignID)
+		campaignCtx, err := w.loadCampaignContext(ctx, event.CampaignID)
 		if err != nil {
-			return fmt.Errorf("load campaign commands: %w", err)
+			return fmt.Errorf("load campaign context: %w", err)
 		}
 
-		// Find current command by step.
-		var currentCmd *redispkg.CampaignCommandCache
-		for i := range commands {
-			if commands[i].Sequence == state.CurrentStep {
-				currentCmd = &commands[i]
-				break
-			}
-		}
+		currentCmd := campaignCtx.commandByStep[state.CurrentStep]
 
 		if currentCmd != nil && currentCmd.ExpectResponse {
 			// Wait for MO — update card state to awaiting_mo.
@@ -416,7 +410,7 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 			)
 		} else {
 			// No response expected — advance to next step or complete.
-			return w.advanceOrComplete(ctx, event, commands)
+			return w.advanceOrComplete(ctx, event, campaignCtx.commands)
 		}
 
 	case "FAILED_PARTIAL_SUBMIT":
@@ -465,10 +459,11 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 		w.checkCampaignComplete(ctx, event.CampaignID)
 	case "FAILED_SUBMIT", "FAILED", "UNDELIV", "EXPIRED", "DELETED", "REJECTD":
 		// Get max retries from campaign.
-		campaignParams, err := w.loadCampaignParamsCached(ctx, event.CampaignID)
+		campaignCtx, err := w.loadCampaignContext(ctx, event.CampaignID)
 		if err != nil {
-			return fmt.Errorf("load campaign params: %w", err)
+			return fmt.Errorf("load campaign context: %w", err)
 		}
+		campaignParams := campaignCtx.params
 
 		if state.RetryCount+1 < campaignParams.MaxRetries {
 			// Retry: publish card.activate with same step, incremented retry count.
@@ -588,7 +583,7 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 	}
 
 	// 2. Load card keys via keystore.
-	cardKeys, err := w.keyStore.GetKeys(ctx, event.CardID)
+	cardKeys, err := w.loadCardKeys(ctx, event.CardID)
 	if err != nil {
 		return fmt.Errorf("get card keys: %w", err)
 	}
@@ -600,18 +595,12 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 	}
 
 	// 4. Load campaign command cache to get security profile.
-	commands, err := w.loadCampaignCommands(ctx, event.CampaignID)
+	campaignCtx, err := w.loadCampaignContext(ctx, event.CampaignID)
 	if err != nil {
-		return fmt.Errorf("load campaign commands: %w", err)
+		return fmt.Errorf("load campaign context: %w", err)
 	}
 
-	var currentCmd *redispkg.CampaignCommandCache
-	for i := range commands {
-		if commands[i].Sequence == state.CurrentStep {
-			currentCmd = &commands[i]
-			break
-		}
-	}
+	currentCmd := campaignCtx.commandByStep[state.CurrentStep]
 	if currentCmd == nil {
 		return fmt.Errorf("no command found at sequence %d for campaign %s", state.CurrentStep, event.CampaignID)
 	}
@@ -686,7 +675,7 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 			CampaignID: event.CampaignID,
 			Step:       state.CurrentStep,
 			EventID:    event.EventID,
-		}, commands)
+		}, campaignCtx.commands)
 	}
 
 	// PoR error — mark card as failed.
@@ -810,7 +799,11 @@ func (w *CardWorker) checkCampaignComplete(ctx context.Context, campaignID strin
 		return
 	}
 
-	if stats.Pending > 0 || stats.InProgress > 0 {
+	terminal := stats.Completed + stats.Failed + stats.Skipped
+	if stats.Total == 0 {
+		return
+	}
+	if terminal < stats.Total {
 		return
 	}
 
@@ -876,12 +869,16 @@ func (w *CardWorker) completeCampaign(ctx context.Context, campaignID string, st
 
 // loadProfileCached loads a card profile using cache-aside: try Redis first, fall back to DB.
 func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*db.Profile, error) {
+	if cached, ok := w.profileCache.Load(profileID); ok {
+		return cached.(*db.Profile), nil
+	}
 	var profile db.Profile
 	err := w.redis.GetCachedProfile(ctx, profileID, &profile)
 	if err != nil && !errors.Is(err, goredis.Nil) {
 		w.logger.Warn("redis profile cache error", zap.Error(err))
 	}
 	if err == nil {
+		w.profileCache.Store(profileID, &profile)
 		return &profile, nil
 	}
 	// Cache miss or error — load from DB.
@@ -889,6 +886,7 @@ func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*
 		return nil, fmt.Errorf("load profile %s: %w", profileID, err)
 	}
 	_ = w.redis.CacheProfile(ctx, profileID, &profile)
+	w.profileCache.Store(profileID, &profile)
 	return &profile, nil
 }
 
@@ -964,6 +962,47 @@ func (w *CardWorker) loadCampaignCommands(ctx context.Context, campaignID string
 	_ = w.redis.CacheCampaignCommands(ctx, campaignID, commands)
 
 	return commands, nil
+}
+
+func (w *CardWorker) loadCardKeys(ctx context.Context, cardID string) (*keystore.CardKeyMaterial, error) {
+	if cached, ok := w.cardKeyCache.Load(cardID); ok {
+		return cached.(*keystore.CardKeyMaterial), nil
+	}
+
+	keys, err := w.keyStore.GetKeys(ctx, cardID)
+	if err != nil {
+		return nil, err
+	}
+	w.cardKeyCache.Store(cardID, keys)
+	return keys, nil
+}
+
+func (w *CardWorker) loadCampaignContext(ctx context.Context, campaignID string) (*campaignExecutionContext, error) {
+	if cached, ok := w.campaignCache.Load(campaignID); ok {
+		return cached.(*campaignExecutionContext), nil
+	}
+
+	commands, err := w.loadCampaignCommands(ctx, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	params, err := w.loadCampaignParamsCached(ctx, campaignID)
+	if err != nil {
+		return nil, err
+	}
+
+	commandByStep := make(map[int]*redispkg.CampaignCommandCache, len(commands))
+	for i := range commands {
+		commandByStep[commands[i].Sequence] = &commands[i]
+	}
+
+	campaignCtx := &campaignExecutionContext{
+		commands:      commands,
+		commandByStep: commandByStep,
+		params:        params,
+	}
+	w.campaignCache.Store(campaignID, campaignCtx)
+	return campaignCtx, nil
 }
 
 // buildSecProfileFromCache converts a CampaignCommandCache to a gsm0348.SecurityProfile.

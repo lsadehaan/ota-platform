@@ -102,46 +102,16 @@ func (s *ExecutionStore) UpdateCampaignCard(ctx context.Context, campaignID, car
 	}
 
 	cardBucket := s.client.CardBucket(cardID)
-	applied := false
-	if oldUpdatedAt.IsZero() {
-		query := `INSERT INTO card_state_by_card (
+	writeTS := updatedAt.UTC().UnixMicro()
+	if err := s.client.Session().Query(
+		`INSERT INTO card_state_by_card (
 			card_bucket, card_id, campaign_id, status, current_step, retry_count,
 			last_msg_id, last_smpp_message_id, last_error_code, last_error_text, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) IF NOT EXISTS`
-		var err error
-		cas := map[string]interface{}{}
-		applied, err = s.client.Session().Query(query,
-			cardBucket, cardUUID, campaignUUID, status, currentStep, retryCount,
-			lastMsgID, lastSMPPMsgID, lastErrorCode, lastErrorText, updatedAt,
-		).WithContext(ctx).MapScanCAS(cas)
-		if err != nil {
-			return fmt.Errorf("insert card snapshot: %w", err)
-		}
-	} else {
-		query := `UPDATE card_state_by_card
-			SET campaign_id = ?, status = ?, current_step = ?, retry_count = ?, last_msg_id = ?,
-				last_smpp_message_id = ?, last_error_code = ?, last_error_text = ?, updated_at = ?
-			WHERE card_bucket = ? AND card_id = ?
-			IF updated_at = ?`
-		var err error
-		cas := map[string]interface{}{}
-		applied, err = s.client.Session().Query(query,
-			campaignUUID, status, currentStep, retryCount, lastMsgID, lastSMPPMsgID,
-			lastErrorCode, lastErrorText, updatedAt, cardBucket, cardUUID, oldUpdatedAt,
-		).WithContext(ctx).MapScanCAS(cas)
-		if err != nil {
-			return fmt.Errorf("update card snapshot: %w", err)
-		}
-	}
-	if !applied {
-		var currentUpdatedAt time.Time
-		if err := s.client.Session().Query(
-			`SELECT updated_at FROM card_state_by_card WHERE card_bucket = ? AND card_id = ?`,
-			cardBucket, cardUUID,
-		).WithContext(ctx).Scan(&currentUpdatedAt); err == nil && !currentUpdatedAt.Before(updatedAt) {
-			return nil
-		}
-		return fmt.Errorf("card snapshot compare-and-set failed for card %s", cardID)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) USING TIMESTAMP ?`,
+		cardBucket, cardUUID, campaignUUID, status, currentStep, retryCount,
+		lastMsgID, lastSMPPMsgID, lastErrorCode, lastErrorText, updatedAt.UTC(), writeTS,
+	).WithContext(ctx).Exec(); err != nil {
+		return fmt.Errorf("upsert card snapshot: %w", err)
 	}
 
 	campaignBucket := s.client.CampaignBucket(campaignID, cardID)

@@ -14,7 +14,7 @@ Environment:
 - real `ota-api`, `campaign-planner`, `card-executor`, `read-model-projector`, `sms-gateway`, `reconciler`
 - only the SMSC is mocked
 
-Workload used for the most relevant run:
+Initial workload used for the first relevant run:
 - `5000` cards
 - `1` OTA command per card
 - `1` SMS part per card
@@ -23,9 +23,9 @@ Workload used for the most relevant run:
 - `10` executor replicas
 - `4` gateway replicas
 
-## Final Observed Result
+## Results
 
-Final completed run:
+First strong end-to-end result:
 - elapsed: `1m3.404478351s`
 - cards/sec: `78.86`
 - SMS parts/sec: `78.86`
@@ -33,18 +33,37 @@ Final completed run:
 - delivered: `5000`
 - failed: `0`
 
-This is a real end-to-end result on the local deployed stack.
+Updated large-batch result after additional executor/gateway fixes:
+- `10000` cards
+- `2` planners
+- `24` executors
+- `8` gateways
+- `1` projector
+- campaign `started_at`: `2026-03-08T08:40:39.145634Z`
+- campaign `completed_at`: `2026-03-08T08:41:55.127392Z`
+- elapsed: `75.98s`
+- cards/sec: `131.62`
+- SMS parts/sec: `131.62`
+- sent: `10000`
+- delivered by campaign state: `10000`
+- failed: `0`
+
+This is a real end-to-end result on the local deployed stack with only SMSC mocked.
 
 ## Before / After
 
 Earlier best local result before the latest batching/parallelism changes:
 - about `16.92 TPS`
 
-Current result after the changes below:
+Intermediate result after batching/projector parallelism:
 - `78.86 TPS`
 
+Current result after the additional runtime fixes below:
+- `131.62 TPS`
+
 Approximate improvement:
-- `4.66x`
+- vs `16.92 TPS` baseline: `7.78x`
+- vs `78.86 TPS` intermediate result: `1.67x`
 
 ## Main Configuration That Moved Throughput
 
@@ -84,6 +103,10 @@ Meaning:
 Meaning:
 - wide cross-card concurrency for card state-machine advancement
 
+Later high-throughput run:
+- `CARD_WORKER_CONCURRENCY=16`
+- `24` executor replicas
+
 ### Gateway
 
 - `SMS_SENDER_WORKERS=32`
@@ -93,6 +116,12 @@ Meaning:
 
 Meaning:
 - high potential submit concurrency at the SMPP edge
+
+Later high-throughput run:
+- `SMS_SENDER_WORKERS=64`
+- `SMPP_CONNECTIONS=12`
+- `SMPP_WINDOW_SIZE=20`
+- `8` gateway replicas
 
 ### Projector
 
@@ -161,6 +190,31 @@ Interpretation:
 - the bottleneck shifted away from projector serialization
 - Kafka is now the hottest component in the local run
 
+### After the next runtime fixes
+
+The changes that moved the stack from `~79 TPS` to `~132 TPS` were:
+- executor completion/progress now derives from durable Scylla query state instead of drifting counters
+- Scylla card state updates no longer use per-update CAS/LWT on the hot path
+- executor now uses process-local caches for:
+  - campaign command context
+  - campaign params
+  - profiles
+  - card keys
+- SMPP pool no longer blocks on the first saturated connection window; it skips full connections and uses the next available slot
+- OTel metrics now export per replica with `service.instance.id`
+
+Observed hot-path timings from OTel after these fixes:
+- executor `card.activate`: about `292ms` average across replicas
+- executor `card.mo_received`: about `286ms` average across replicas
+- gateway SMPP submit: about `589ms` average across replicas
+- projector flush: about `91ms` average
+- planner publish: still negligible compared with the rest of the pipeline
+
+Interpretation:
+- the major gains came from removing hot-path coordination/state overhead, not from adding more projector replicas
+- projector is no longer the first bottleneck
+- gateway submit latency is still expensive even with the mock SMSC, which means connection-window utilization and transport overhead are still worth revisiting
+
 ## What This Means
 
 Current local performance is no longer primarily blocked by:
@@ -170,10 +224,10 @@ Current local performance is no longer primarily blocked by:
 - tiny Kafka batches
 
 Current likely next bottlenecks:
-1. single-node Kafka capacity in local Compose
+1. gateway submit latency and SMPP pool behavior
 2. remaining executor hot-path remote round trips
-3. remaining message-log/projector overhead
-4. local single-host container scheduling effects
+3. single-node Kafka capacity in local Compose
+4. remaining message-log/projector overhead
 
 ## Important Notes
 
@@ -198,6 +252,11 @@ Confirmed useful live metrics included:
 - `ota_executor_events_processed_total`
 - `ota_projector_actions_processed_total`
 
+Important observability fix:
+- Prometheus now retains per-replica labels through the collector
+- `service.instance.id` is exported and visible on metrics
+- fleet-wide totals can now be summed correctly instead of collapsing across replicas
+
 ## Recommended Next Steps
 
 1. Run isolated component performance tests for:
@@ -206,13 +265,15 @@ Confirmed useful live metrics included:
    - gateway
    - projector
 
-2. Increase Kafka capacity in the test topology:
-   - more brokers, not just more partitions on one broker
+2. Focus next on the transport path:
+   - measure SMPP submit queueing/window utilization explicitly
+   - determine why gateway submit latency is still high against the mock SMSC
 
-3. Continue reducing `message-log` event volume where possible.
+3. Continue reducing executor hot-path round trips where possible.
 
-4. Re-run the same 5k scenario after improving Kafka topology and compare:
+4. Re-run the same large-batch scenario after transport/executor changes and compare:
    - final TPS
+   - gateway submit latency
+   - executor `card.activate` latency
    - Kafka CPU
    - consumer lag
-   - projector CPU

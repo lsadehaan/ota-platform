@@ -178,7 +178,7 @@ func (s *QueryStore) CampaignStats(ctx context.Context, campaignID uuid.UUID) (C
 		return CampaignStats{}, err
 	}
 	stats.Total = stats.Pending + stats.InProgress + stats.Completed + stats.Failed + stats.Skipped
-	return stats, nil
+	return normalizeCampaignStats(stats), nil
 }
 
 func (s *QueryStore) CampaignStatsBatch(ctx context.Context, campaignIDs []uuid.UUID) (map[uuid.UUID]CampaignStats, error) {
@@ -225,6 +225,25 @@ func (s *QueryStore) CampaignStatsBatch(ctx context.Context, campaignIDs []uuid.
 		return nil, firstErr
 	}
 	return out, nil
+}
+
+func normalizeCampaignStats(stats CampaignStats) CampaignStats {
+	terminal := stats.Completed + stats.Failed + stats.Skipped
+	if stats.Pending < 0 {
+		stats.Pending = 0
+	}
+	if stats.InProgress < 0 {
+		stats.InProgress = 0
+	}
+	if stats.Total < terminal {
+		stats.Total = terminal
+	}
+	if terminal >= stats.Total && stats.Total > 0 {
+		stats.Pending = 0
+		stats.InProgress = 0
+		stats.Total = terminal
+	}
+	return stats
 }
 
 func (s *QueryStore) ListCampaignCards(ctx context.Context, campaignID uuid.UUID, statusFilter string) ([]CampaignCardView, error) {

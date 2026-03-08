@@ -141,26 +141,36 @@ func (p *Pool) Submit(req *SubmitRequest) (*SubmitResponse, error) {
 
 	numConns := uint64(len(conns))
 
-	// Try each connection starting from the round-robin position.
-	start := atomic.AddUint64(&p.nextConn, 1)
-	for i := uint64(0); i < numConns; i++ {
-		idx := (start + i) % numConns
-		conn := conns[idx]
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		// Try each connection starting from the round-robin position.
+		start := atomic.AddUint64(&p.nextConn, 1)
+		for i := uint64(0); i < numConns; i++ {
+			idx := (start + i) % numConns
+			conn := conns[idx]
 
-		if !conn.client.IsBound() {
-			continue
+			if !conn.client.IsBound() {
+				continue
+			}
+
+			// Skip saturated connections instead of blocking on the first one,
+			// otherwise a single full window creates head-of-line blocking.
+			select {
+			case conn.window <- struct{}{}:
+				resp, err := conn.client.Submit(req)
+				<-conn.window
+				return resp, err
+			default:
+			}
 		}
 
-		// Acquire a window slot (blocks if window is full -- back-pressure).
-		conn.window <- struct{}{}
-
-		resp, err := conn.client.Submit(req)
-		// Release the window slot immediately after submit returns.
-		<-conn.window
-		return resp, err
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(1 * time.Millisecond)
 	}
 
-	return nil, fmt.Errorf("no bound connections available in pool")
+	return nil, fmt.Errorf("no bound connections with available window capacity")
 }
 
 // Close shuts down the pool: signals the reconnect loop to stop and closes

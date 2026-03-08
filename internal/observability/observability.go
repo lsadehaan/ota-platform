@@ -3,6 +3,7 @@ package observability
 import (
 	"context"
 	"os"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -25,10 +26,21 @@ func Init(ctx context.Context, serviceName string, logger *zap.Logger) (Shutdown
 		return func(context.Context) error { return nil }, nil
 	}
 
+	instanceID := os.Getenv("OTEL_SERVICE_INSTANCE_ID")
+	if instanceID == "" {
+		hostname, err := os.Hostname()
+		if err == nil && hostname != "" {
+			instanceID = hostname + "-" + strconv.Itoa(os.Getpid())
+		} else {
+			instanceID = serviceName + "-" + strconv.Itoa(os.Getpid())
+		}
+	}
+
 	resourceAttrs, err := resource.New(
 		ctx,
 		resource.WithAttributes(
 			semconv.ServiceNameKey.String(serviceName),
+			semconv.ServiceInstanceID(instanceID),
 		),
 	)
 	if err != nil {
