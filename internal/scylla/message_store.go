@@ -20,6 +20,7 @@ type MessageLogStore struct {
 
 type metricDelta struct {
 	HourBucket       time.Time
+	MinuteBucket     time.Time
 	CampaignID       *gocql.UUID
 	CampaignBucket   int
 	Total            int64
@@ -128,10 +129,12 @@ func (s *MessageLogStore) CreateBatch(ctx context.Context, logs []db.MessageLog,
 		}
 
 		hourBucket := log.CreatedAt.UTC().Truncate(time.Hour)
+		minuteBucket := log.CreatedAt.UTC().Truncate(time.Minute)
 		mtDelta, moDelta := directionCounters(log.Direction)
 		deliveredDelta, undeliveredDelta := dlrCounters(log.DLRStatus)
 		addMetricCounterQueries(counterBatch, metricDelta{
 			HourBucket:       hourBucket,
+			MinuteBucket:     minuteBucket,
 			CampaignID:       campaignID,
 			CampaignBucket:   campaignBucket,
 			Total:            1,
@@ -351,9 +354,11 @@ func (s *MessageLogStore) applyUpdate(ctx context.Context, update kafkapkg.Messa
 	oldDelivered, oldUndelivered := dlrCounters(dlrStatus)
 	newDelivered, newUndelivered := dlrCounters(nextDlrStatus)
 	hourBucket := createdAt.UTC().Truncate(time.Hour)
+	minuteBucket := createdAt.UTC().Truncate(time.Minute)
 	if oldDelivered != newDelivered || oldUndelivered != newUndelivered {
 		addMetricCounterQueries(counterBatch, metricDelta{
 			HourBucket:     hourBucket,
+			MinuteBucket:   minuteBucket,
 			CampaignID:     nullableUUIDPtr(campaignID),
 			CampaignBucket: campaignBucket,
 			Delivered:      newDelivered - oldDelivered,
@@ -362,6 +367,7 @@ func (s *MessageLogStore) applyUpdate(ctx context.Context, update kafkapkg.Messa
 	}
 	addMetricCounterQueries(counterBatch, metricDelta{
 		HourBucket:       hourBucket,
+		MinuteBucket:     minuteBucket,
 		CampaignID:       nullableUUIDPtr(campaignID),
 		CampaignBucket:   campaignBucket,
 		ErrorCountDeltas: errorCounterDeltas(&status, nextStatus, dlrStatus, nextDlrStatus, porStatusCode, nextPORStatusCode),
@@ -483,6 +489,18 @@ func addMetricCounterQueries(batch *gocql.Batch, delta metricDelta) {
 			 WHERE hour_bucket = ?`,
 			delta.Total, delta.MT, delta.MO, delta.Delivered, delta.Undelivered, delta.HourBucket,
 		)
+		if !delta.MinuteBucket.IsZero() {
+			batch.Query(
+				`UPDATE message_metrics_by_minute
+				 SET total_messages = total_messages + ?,
+				     mt_messages = mt_messages + ?,
+				     mo_messages = mo_messages + ?,
+				     delivered_messages = delivered_messages + ?,
+				     undelivered_messages = undelivered_messages + ?
+				 WHERE minute_bucket = ?`,
+				delta.Total, delta.MT, delta.MO, delta.Delivered, delta.Undelivered, delta.MinuteBucket,
+			)
+		}
 		if delta.CampaignID != nil {
 			batch.Query(
 				`UPDATE campaign_message_metrics_by_hour

@@ -304,6 +304,14 @@ func (c *Client) ensureSchema() error {
 			delivered_messages counter,
 			undelivered_messages counter
 		)`,
+		`CREATE TABLE IF NOT EXISTS message_metrics_by_minute (
+			minute_bucket timestamp PRIMARY KEY,
+			total_messages counter,
+			mt_messages counter,
+			mo_messages counter,
+			delivered_messages counter,
+			undelivered_messages counter
+		)`,
 		`CREATE TABLE IF NOT EXISTS campaign_message_metrics_by_hour (
 			campaign_id uuid,
 			campaign_bucket int,

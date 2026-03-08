@@ -111,24 +111,24 @@ function SMSThroughputChart() {
   const { data: throughput, isLoading } = useQuery<SMSThroughputPoint[]>({
     queryKey: ["dashboard", "sms-throughput"],
     queryFn: dashboardAPI.getSMSThroughput,
-    refetchInterval: 60000,
+    refetchInterval: 15000,
   })
 
   const chartData = (throughput || []).map((point) => ({
-    hour: new Date(point.timestamp).toLocaleTimeString("en-US", {
+    time: new Date(point.timestamp).toLocaleTimeString("en-US", {
       hour: "2-digit",
       minute: "2-digit",
       hour12: false,
     }),
-    sent: point.sent,
-    delivered: point.delivered,
-    failed: point.failed,
+    sent: Math.round(point.sent * 100) / 100,
+    delivered: Math.round(point.delivered * 100) / 100,
+    failed: Math.round(point.failed * 100) / 100,
   }))
 
   return (
     <Card className="col-span-2">
       <CardHeader>
-        <CardTitle className="text-base">SMS Throughput (Last 24h)</CardTitle>
+        <CardTitle className="text-base">SMS Throughput — avg msg/s (Last Hour)</CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -142,15 +142,17 @@ function SMSThroughputChart() {
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
               <XAxis
-                dataKey="hour"
+                dataKey="time"
                 tick={{ fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
+                interval="preserveStartEnd"
               />
               <YAxis
                 tick={{ fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
+                label={{ value: "msg/s", angle: -90, position: "insideLeft", style: { fontSize: 11 } }}
               />
               <Tooltip
                 contentStyle={{
@@ -159,6 +161,7 @@ function SMSThroughputChart() {
                   borderRadius: "var(--radius)",
                   fontSize: 12,
                 }}
+                formatter={(value: number) => [`${value.toFixed(2)} msg/s`]}
               />
               <Legend />
               <Bar

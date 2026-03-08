@@ -65,10 +65,10 @@ type ErrorCount struct {
 }
 
 type ThroughputPoint struct {
-	Timestamp time.Time
-	Sent      int64
-	Delivered int64
-	Failed    int64
+	Timestamp time.Time `json:"timestamp"`
+	Sent      float64   `json:"sent"`
+	Delivered float64   `json:"delivered"`
+	Failed    float64   `json:"failed"`
 }
 
 type hourlyMessageMetrics struct {
@@ -580,13 +580,64 @@ func throughputFromHourlyMetrics(metrics []hourlyMessageMetrics) []ThroughputPoi
 	for _, metric := range metrics {
 		points = append(points, ThroughputPoint{
 			Timestamp: metric.Timestamp,
-			Sent:      metric.MT,
-			Delivered: metric.Delivered,
-			Failed:    metric.Undelivered,
+			Sent:      float64(metric.MT),
+			Delivered: float64(metric.Delivered),
+			Failed:    float64(metric.Undelivered),
 		})
 	}
 	sort.Slice(points, func(i, j int) bool { return points[i].Timestamp.Before(points[j].Timestamp) })
 	return points
+}
+
+// MinuteThroughput returns per-minute average TPS for the last hour.
+func (s *QueryStore) MinuteThroughput(ctx context.Context) ([]ThroughputPoint, error) {
+	now := time.Now().UTC()
+	since := now.Add(-1 * time.Hour)
+	metrics, err := s.loadMinuteMetrics(ctx, since, now)
+	if err != nil {
+		return nil, err
+	}
+	points := make([]ThroughputPoint, 0, len(metrics))
+	for _, m := range metrics {
+		points = append(points, ThroughputPoint{
+			Timestamp: m.Timestamp,
+			Sent:      float64(m.MT) / 60.0,
+			Delivered: float64(m.Delivered) / 60.0,
+			Failed:    float64(m.Undelivered) / 60.0,
+		})
+	}
+	sort.Slice(points, func(i, j int) bool { return points[i].Timestamp.Before(points[j].Timestamp) })
+	return points, nil
+}
+
+func (s *QueryStore) loadMinuteMetrics(ctx context.Context, since, until time.Time) ([]hourlyMessageMetrics, error) {
+	start := since.UTC().Truncate(time.Minute)
+	end := until.UTC().Truncate(time.Minute)
+	out := make([]hourlyMessageMetrics, 0, int(end.Sub(start)/time.Minute)+1)
+	for bucket := start; !bucket.After(end); bucket = bucket.Add(time.Minute) {
+		var total, mt, mo, delivered, undelivered int64
+		err := s.client.Session().Query(
+			`SELECT total_messages, mt_messages, mo_messages, delivered_messages, undelivered_messages
+			 FROM message_metrics_by_minute WHERE minute_bucket = ?`,
+			bucket,
+		).WithContext(ctx).Consistency(gocql.One).Scan(&total, &mt, &mo, &delivered, &undelivered)
+		if err == gocql.ErrNotFound {
+			out = append(out, hourlyMessageMetrics{Timestamp: bucket})
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, hourlyMessageMetrics{
+			Timestamp:   bucket,
+			Total:       total,
+			MT:          mt,
+			MO:          mo,
+			Delivered:   delivered,
+			Undelivered: undelivered,
+		})
+	}
+	return out, nil
 }
 
 func (s *QueryStore) ErrorSummary(ctx context.Context, since time.Time) (status []ErrorCount, dlr []ErrorCount, por []ErrorCount, err error) {

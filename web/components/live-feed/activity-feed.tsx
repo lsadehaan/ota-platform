@@ -91,6 +91,28 @@ function ActivityItem({ event, isNew }: ActivityItemProps) {
   )
 }
 
+function normalizeActivity(raw: any): ActivityEvent {
+  // API returns message records: {id, status, direction, card_id, msisdn, iccid, created_at, ...}
+  // Normalize to ActivityEvent shape
+  if (raw.type && raw.timestamp) return raw as ActivityEvent
+  const status = raw.status || "unknown"
+  const direction = raw.direction || ""
+  const msisdn = raw.msisdn || raw.iccid || raw.card_id || ""
+  const description = direction
+    ? `${direction} ${status}${msisdn ? ` — ${msisdn}` : ""}`
+    : status
+  return {
+    id: raw.id || `${Date.now()}`,
+    type: status,
+    description,
+    entity_type: raw.campaign_id ? "campaign" : "message",
+    entity_id: raw.campaign_id || raw.card_id || "",
+    user: "",
+    timestamp: raw.created_at || raw.timestamp || new Date().toISOString(),
+    metadata: {},
+  }
+}
+
 export function ActivityFeed() {
   const [liveEvents, setLiveEvents] = useState<ActivityEvent[]>([])
   const [newEventIds, setNewEventIds] = useState<Set<string>>(new Set())
@@ -138,9 +160,10 @@ export function ActivityFeed() {
     }
   }, [handleWSEvent])
 
+  const normalizedInitial = (initialEvents || []).map(normalizeActivity)
   const allEvents: ActivityEvent[] = [
     ...liveEvents,
-    ...(initialEvents || []).filter(
+    ...normalizedInitial.filter(
       (e) => !liveEvents.some((le) => le.id === e.id)
     ),
   ].slice(0, 100)

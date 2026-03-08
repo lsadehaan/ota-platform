@@ -14,10 +14,11 @@ import (
 )
 
 type scenario struct {
-	Cards     int
-	Planners  int
-	Executors int
-	Gateways  int
+	Cards      int
+	Planners   int
+	Executors  int
+	Gateways   int
+	Projectors int
 }
 
 type result struct {
@@ -36,20 +37,21 @@ var summaryLine = regexp.MustCompile(`E2E summary: cards=([0-9]+) elapsed=([^ ]+
 
 func main() {
 	var (
-		composeFiles = flag.String("compose-files", "deployments/docker-compose.yml,deployments/docker-compose.load.yml", "comma-separated docker compose files")
-		cardList     = flag.String("cards", "50,200", "comma-separated card counts")
-		plannerList  = flag.String("planners", "1,2", "comma-separated planner replica counts")
-		executorList = flag.String("executors", "1,2", "comma-separated executor replica counts")
-		gatewayList  = flag.String("gateways", "1,2", "comma-separated gateway replica counts")
-		networkName  = flag.String("network", "deployments_default", "compose network name for e2e test container")
-		campaignTO   = flag.String("campaign-timeout", "2m", "campaign completion timeout passed to the E2E test")
-		build        = flag.Bool("build", false, "rebuild service images before running scenarios")
-		keepStack    = flag.Bool("keep-stack", false, "leave the last scenario stack running")
-		output       = flag.String("output", "", "optional markdown report output path")
+		composeFiles  = flag.String("compose-files", "deployments/docker-compose.yml,deployments/docker-compose.load.yml", "comma-separated docker compose files")
+		cardList      = flag.String("cards", "50,200", "comma-separated card counts")
+		plannerList   = flag.String("planners", "1,2", "comma-separated planner replica counts")
+		executorList  = flag.String("executors", "1,2", "comma-separated executor replica counts")
+		gatewayList   = flag.String("gateways", "1,2", "comma-separated gateway replica counts")
+		projectorList = flag.String("projectors", "1", "comma-separated projector replica counts")
+		networkName   = flag.String("network", "deployments_default", "compose network name for e2e test container")
+		campaignTO    = flag.String("campaign-timeout", "2m", "campaign completion timeout passed to the E2E test")
+		build         = flag.Bool("build", false, "rebuild service images before running scenarios")
+		keepStack     = flag.Bool("keep-stack", false, "leave the last scenario stack running")
+		output        = flag.String("output", "", "optional markdown report output path")
 	)
 	flag.Parse()
 
-	scenarios, err := buildScenarios(*cardList, *plannerList, *executorList, *gatewayList)
+	scenarios, err := buildScenarios(*cardList, *plannerList, *executorList, *gatewayList, *projectorList)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "build scenarios: %v\n", err)
 		os.Exit(1)
@@ -91,7 +93,7 @@ func main() {
 	fmt.Print(report)
 }
 
-func buildScenarios(cardsCSV, plannersCSV, executorsCSV, gatewaysCSV string) ([]scenario, error) {
+func buildScenarios(cardsCSV, plannersCSV, executorsCSV, gatewaysCSV, projectorsCSV string) ([]scenario, error) {
 	cards, err := parseCSVInts(cardsCSV)
 	if err != nil {
 		return nil, fmt.Errorf("cards: %w", err)
@@ -108,12 +110,18 @@ func buildScenarios(cardsCSV, plannersCSV, executorsCSV, gatewaysCSV string) ([]
 	if err != nil {
 		return nil, fmt.Errorf("gateways: %w", err)
 	}
-	out := make([]scenario, 0, len(cards)*len(planners)*len(executors)*len(gateways))
+	projectors, err := parseCSVInts(projectorsCSV)
+	if err != nil {
+		return nil, fmt.Errorf("projectors: %w", err)
+	}
+	out := make([]scenario, 0, len(cards)*len(planners)*len(executors)*len(gateways)*len(projectors))
 	for _, c := range cards {
 		for _, p := range planners {
 			for _, e := range executors {
 				for _, g := range gateways {
-					out = append(out, scenario{Cards: c, Planners: p, Executors: e, Gateways: g})
+					for _, r := range projectors {
+						out = append(out, scenario{Cards: c, Planners: p, Executors: e, Gateways: g, Projectors: r})
+					}
 				}
 			}
 		}
@@ -131,6 +139,7 @@ func composeUp(files []string, sc scenario, build bool) error {
 		"--scale", fmt.Sprintf("campaign-planner=%d", sc.Planners),
 		"--scale", fmt.Sprintf("card-executor=%d", sc.Executors),
 		"--scale", fmt.Sprintf("sms-gateway=%d", sc.Gateways),
+		"--scale", fmt.Sprintf("read-model-projector=%d", sc.Projectors),
 	)
 	cmd := exec.Command("docker", args...)
 	cmd.Stdout = os.Stdout
@@ -214,11 +223,11 @@ func renderReport(results []result, files []string) string {
 	fmt.Fprintf(&b, "# E2E Load Report\n\n")
 	fmt.Fprintf(&b, "Generated: %s UTC\n\n", time.Now().UTC().Format(time.RFC3339))
 	fmt.Fprintf(&b, "- Compose files: `%s`\n\n", strings.Join(files, ", "))
-	fmt.Fprintf(&b, "| Cards | Planners | Executors | Gateways | Elapsed | Card TPS | SMS Part TPS | Sent | Delivered | Failed | Status | Progress |\n")
-	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |\n")
+	fmt.Fprintf(&b, "| Cards | Planners | Executors | Gateways | Projectors | Elapsed | Card TPS | SMS Part TPS | Sent | Delivered | Failed | Status | Progress |\n")
+	fmt.Fprintf(&b, "| ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |\n")
 	for _, res := range results {
-		fmt.Fprintf(&b, "| %d | %d | %d | %d | %s | %.2f | %.2f | %d | %d | %d | %s | %.2f%% |\n",
-			res.Scenario.Cards, res.Scenario.Planners, res.Scenario.Executors, res.Scenario.Gateways,
+		fmt.Fprintf(&b, "| %d | %d | %d | %d | %d | %s | %.2f | %.2f | %d | %d | %d | %s | %.2f%% |\n",
+			res.Scenario.Cards, res.Scenario.Planners, res.Scenario.Executors, res.Scenario.Gateways, res.Scenario.Projectors,
 			res.Elapsed, res.CardTPS, res.PartTPS, res.Sent, res.Delivered, res.Failed, res.Status, res.Progress)
 	}
 	return b.String()

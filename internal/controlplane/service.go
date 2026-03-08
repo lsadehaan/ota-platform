@@ -35,6 +35,7 @@ type QueryStore interface {
 	CampaignMessageMetrics(ctx context.Context, campaignID uuid.UUID, since time.Time) (scyllastore.MessageMetrics, error)
 	Throughput(ctx context.Context, since time.Time) ([]scyllastore.ThroughputPoint, error)
 	CampaignThroughput(ctx context.Context, campaignID uuid.UUID, since time.Time) ([]scyllastore.ThroughputPoint, error)
+	MinuteThroughput(ctx context.Context) ([]scyllastore.ThroughputPoint, error)
 	ErrorSummary(ctx context.Context, since time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error)
 	CampaignErrorSummary(ctx context.Context, campaignID uuid.UUID, since time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error)
 }

@@ -70,6 +70,9 @@ func (campaignTestQueryStore) Throughput(context.Context, time.Time) ([]scyllast
 func (campaignTestQueryStore) CampaignThroughput(context.Context, uuid.UUID, time.Time) ([]scyllastore.ThroughputPoint, error) {
 	return nil, nil
 }
+func (campaignTestQueryStore) MinuteThroughput(context.Context) ([]scyllastore.ThroughputPoint, error) {
+	return nil, nil
+}
 func (campaignTestQueryStore) ErrorSummary(context.Context, time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error) {
 	return nil, nil, nil, nil
 }
@@ -127,6 +130,9 @@ func (s *trackingCampaignQueryStore) Throughput(context.Context, time.Time) ([]s
 	return nil, nil
 }
 func (s *trackingCampaignQueryStore) CampaignThroughput(context.Context, uuid.UUID, time.Time) ([]scyllastore.ThroughputPoint, error) {
+	return nil, nil
+}
+func (s *trackingCampaignQueryStore) MinuteThroughput(context.Context) ([]scyllastore.ThroughputPoint, error) {
 	return nil, nil
 }
 func (s *trackingCampaignQueryStore) ErrorSummary(context.Context, time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error) {
