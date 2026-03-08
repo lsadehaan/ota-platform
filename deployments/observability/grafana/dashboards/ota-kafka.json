@@ -8,8 +8,16 @@
   "panels": [
     {
       "type": "timeseries",
+      "title": "Kafka Consumer Lag by Topic",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "sum(kafka_consumergroup_lag) by (topic)", "legendFormat": "{{topic}}"}
+      ]
+    },
+    {
+      "type": "timeseries",
       "title": "Kafka Consumer Lag by Group",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
       "targets": [
         {"expr": "sum(kafka_consumergroup_lag_sum) by (consumergroup)", "legendFormat": "{{consumergroup}}"}
       ]
