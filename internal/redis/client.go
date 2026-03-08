@@ -23,10 +23,9 @@ type Config struct {
 
 // Client is a wrapper around the go-redis client with logging.
 type Client struct {
-	rdb           *redis.Client
-	logger        *zap.Logger
-	encryptionKey []byte
-	aead          cipher.AEAD
+	rdb    *redis.Client
+	logger *zap.Logger
+	aead   cipher.AEAD
 }
 
 // NewClient creates a new Redis client, pings to verify the connection, and
@@ -70,11 +69,14 @@ func NewClient(cfg Config, logger *zap.Logger, encryptionKey []byte) (*Client, e
 		}
 	}
 
+	for i := range encryptionKey {
+		encryptionKey[i] = 0
+	}
+
 	return &Client{
-		rdb:           rdb,
-		logger:        logger,
-		encryptionKey: encryptionKey,
-		aead:          aead,
+		rdb:    rdb,
+		logger: logger,
+		aead:   aead,
 	}, nil
 }
 

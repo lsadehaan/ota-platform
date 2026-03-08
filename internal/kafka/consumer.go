@@ -3,7 +3,6 @@ package kafka
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -39,15 +38,33 @@ type MessageHandler func(ctx context.Context, key []byte, value []byte) error
 
 // Consumer wraps a kafka-go reader for consuming messages as part of a consumer group.
 type Consumer struct {
-	reader    *kafka.Reader
-	handler   MessageHandler
-	logger    *zap.Logger
-	retries   map[string]int
-	retriesMu sync.Mutex
+	reader  *kafka.Reader
+	handler MessageHandler
+	logger  *zap.Logger
+}
+
+type ConsumerOptions struct {
+	StartOffset int64
 }
 
 // NewConsumer creates a new Kafka consumer that joins the specified consumer group.
 func NewConsumer(brokers []string, topic string, groupID string, handler MessageHandler, logger *zap.Logger) *Consumer {
+	return NewConsumerWithOptions(brokers, topic, groupID, ConsumerOptions{}, handler, logger)
+}
+
+func consumerStartOffset(opts ConsumerOptions) int64 {
+	if opts.StartOffset == kafka.FirstOffset || opts.StartOffset == kafka.LastOffset {
+		return opts.StartOffset
+	}
+	switch config.GetEnv("KAFKA_CONSUMER_START_OFFSET", "last") {
+	case "first":
+		return kafka.FirstOffset
+	default:
+		return kafka.LastOffset
+	}
+}
+
+func NewConsumerWithOptions(brokers []string, topic string, groupID string, opts ConsumerOptions, handler MessageHandler, logger *zap.Logger) *Consumer {
 	r := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:       brokers,
 		Topic:         topic,
@@ -56,12 +73,12 @@ func NewConsumer(brokers []string, topic string, groupID string, handler Message
 		MaxBytes:      10e6, // 10 MB
 		MaxWait:       consumerMaxWait(),
 		QueueCapacity: consumerQueueCapacity(),
+		StartOffset:   consumerStartOffset(opts),
 	})
 	return &Consumer{
 		reader:  r,
 		handler: handler,
 		logger:  logger,
-		retries: make(map[string]int),
 	}
 }
 
@@ -82,7 +99,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 				return nil
 			}
 			c.logger.Error("failed to fetch kafka message", zap.Error(err))
-			return fmt.Errorf("fetch message: %w", err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(250 * time.Millisecond):
+			}
+			continue
 		}
 
 		c.logger.Debug("received kafka message",
@@ -155,7 +177,6 @@ func (c *Consumer) Close() error {
 // safe contiguous-offset commits.
 type partitionTracker struct {
 	mu        sync.Mutex
-	pending   map[int64]bool // offsets currently being processed
 	completed map[int64]bool // offsets that finished processing
 	committed int64          // highest committed offset (-1 means none)
 }
@@ -165,18 +186,20 @@ type partitionTracker struct {
 // them to the same worker based on key hash.
 // Offsets are committed in contiguous order per partition to avoid skipping messages.
 type ConcurrentConsumer struct {
-	reader    *kafka.Reader
-	handler   func(ctx context.Context, key []byte, value []byte) error
-	workers   int
-	logger    *zap.Logger
-	retries   map[string]int
-	retriesMu sync.Mutex
+	reader  *kafka.Reader
+	handler func(ctx context.Context, key []byte, value []byte) error
+	workers int
+	logger  *zap.Logger
 }
 
 // NewConcurrentConsumer creates a consumer with N worker goroutines.
 // Messages are dispatched to workers by hashing the message key, ensuring
 // per-key ordering (critical for per-card event ordering).
 func NewConcurrentConsumer(brokers []string, topic, groupID string, workers int, handler func(ctx context.Context, key []byte, value []byte) error, logger *zap.Logger) *ConcurrentConsumer {
+	return NewConcurrentConsumerWithOptions(brokers, topic, groupID, workers, ConsumerOptions{}, handler, logger)
+}
+
+func NewConcurrentConsumerWithOptions(brokers []string, topic, groupID string, workers int, opts ConsumerOptions, handler func(ctx context.Context, key []byte, value []byte) error, logger *zap.Logger) *ConcurrentConsumer {
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:        brokers,
 		Topic:          topic,
@@ -186,14 +209,13 @@ func NewConcurrentConsumer(brokers []string, topic, groupID string, workers int,
 		MaxWait:        consumerMaxWait(),
 		QueueCapacity:  consumerQueueCapacity(),
 		CommitInterval: 0, // manual commits only
-		StartOffset:    kafka.FirstOffset,
+		StartOffset:    consumerStartOffset(opts),
 	})
 	return &ConcurrentConsumer{
 		reader:  reader,
 		handler: handler,
 		workers: workers,
 		logger:  logger,
-		retries: make(map[string]int),
 	}
 }
 
@@ -316,7 +338,6 @@ func (cc *ConcurrentConsumer) commitLoop(ctx context.Context, commitCh <-chan ka
 		t, ok := trackers[partition]
 		if !ok {
 			t = &partitionTracker{
-				pending:   make(map[int64]bool),
 				completed: make(map[int64]bool),
 				committed: -1,
 			}
@@ -343,7 +364,6 @@ func (cc *ConcurrentConsumer) commitLoop(ctx context.Context, commitCh <-chan ka
 			t := getTracker(msg.Partition)
 			t.mu.Lock()
 			t.completed[msg.Offset] = true
-			delete(t.pending, msg.Offset)
 			t.mu.Unlock()
 
 			cc.flushPartition(ctx, msg.Partition, t)

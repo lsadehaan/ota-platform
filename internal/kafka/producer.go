@@ -20,10 +20,11 @@ type Producer struct {
 }
 
 type ProducerOptions struct {
-	RequiredAcks kafka.RequiredAcks
-	Async        bool
-	BatchSize    int
-	BatchTimeout time.Duration
+	RequiredAcks    kafka.RequiredAcks
+	RequiredAcksSet bool
+	Async           bool
+	BatchSize       int
+	BatchTimeout    time.Duration
 }
 
 const (
@@ -50,15 +51,16 @@ func producerBatchTimeout() time.Duration {
 // NewProducer creates a new Kafka producer for the given topic.
 func NewProducer(brokers []string, topic string, logger *zap.Logger) *Producer {
 	return NewProducerWithOptions(brokers, topic, ProducerOptions{
-		RequiredAcks: kafka.RequireAll,
-		BatchSize:    producerBatchSize(),
-		BatchTimeout: producerBatchTimeout(),
+		RequiredAcks:    kafka.RequireAll,
+		RequiredAcksSet: true,
+		BatchSize:       producerBatchSize(),
+		BatchTimeout:    producerBatchTimeout(),
 	}, logger)
 }
 
 // NewProducerWithOptions creates a Kafka producer with explicit writer options.
 func NewProducerWithOptions(brokers []string, topic string, opts ProducerOptions, logger *zap.Logger) *Producer {
-	if opts.RequiredAcks == 0 {
+	if !opts.RequiredAcksSet {
 		opts.RequiredAcks = kafka.RequireAll
 	}
 	if opts.BatchSize <= 0 {

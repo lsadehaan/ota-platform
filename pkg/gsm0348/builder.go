@@ -2,6 +2,7 @@ package gsm0348
 
 import (
 	"context"
+	"crypto/aes"
 	"crypto/cipher"
 	"crypto/des"
 	"fmt"
@@ -322,6 +323,17 @@ func encryptData(mode CipherMode, key []byte, counter []byte, data []byte) ([]by
 	var err error
 
 	switch mode {
+	case CipherAES_CBC:
+		switch {
+		case len(key) >= 32:
+			block, err = aes.NewCipher(key[:32])
+		case len(key) >= 24:
+			block, err = aes.NewCipher(key[:24])
+		case len(key) >= 16:
+			block, err = aes.NewCipher(key[:16])
+		default:
+			return nil, fmt.Errorf("gsm0348: AES key must be at least 16 bytes, got %d", len(key))
+		}
 	case CipherDES_CBC:
 		if len(key) < 8 {
 			return nil, fmt.Errorf("gsm0348: DES key must be at least 8 bytes")

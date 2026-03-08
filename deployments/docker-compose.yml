@@ -55,6 +55,7 @@ services:
       dockerfile: cmd/db-migrate/Dockerfile
     environment:
       DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
     depends_on:
       postgres:
         condition: service_healthy
@@ -65,6 +66,7 @@ services:
       dockerfile: cmd/kafka-init/Dockerfile
     environment:
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       KAFKA_TOPIC_PARTITIONS: "12"
       KAFKA_TOPIC_REPLICATION_FACTOR: "1"
     depends_on:
@@ -85,6 +87,7 @@ services:
       SCYLLA_HOSTS: scylla
       SCYLLA_KEYSPACE: ota_execution
       ALLOWED_ORIGINS: http://localhost:3001,http://10.100.0.1:3001
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -106,6 +109,7 @@ services:
     environment:
       DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -123,6 +127,7 @@ services:
     environment:
       DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       COORDINATION_ADDR: dragonfly:6379
       SCYLLA_HOSTS: scylla
       SCYLLA_KEYSPACE: ota_execution
@@ -146,6 +151,7 @@ services:
       dockerfile: cmd/read-model-projector/Dockerfile
     environment:
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       SCYLLA_HOSTS: scylla
       SCYLLA_KEYSPACE: ota_execution
     depends_on:
@@ -162,6 +168,7 @@ services:
       dockerfile: cmd/reconciler/Dockerfile
     environment:
       DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -174,6 +181,7 @@ services:
       dockerfile: cmd/sms-gateway/Dockerfile
     environment:
       KAFKA_BROKERS: kafka:9092
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       SMPP_HOST: mock-smsc
       SMPP_PORT: "2775"
       SMPP_SYSTEM_ID: ota_user
@@ -211,8 +219,137 @@ services:
     environment:
       INTERNAL_API_URL: http://ota-api:8080
       NEXT_PUBLIC_API_PORT: "8080"
+      NEXT_PUBLIC_GRAFANA_URL: http://localhost:3002
     depends_on:
       - ota-api
 
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  prometheus-config:
+    image: docker:27-cli
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/scripts/generate-config.sh"]
+    environment:
+      COMPOSE_PROJECT_NAME: deployments
+      PROMETHEUS_OUT: /out/prometheus.yml
+    volumes:
+      - ./observability/prometheus/generate-config.sh:/scripts/generate-config.sh:ro
+      - prometheus-config:/out
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      ota-api:
+        condition: service_started
+      card-executor:
+        condition: service_started
+      sms-gateway:
+        condition: service_started
+      read-model-projector:
+        condition: service_started
+      campaign-planner:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "9464:9464"
+
+  prometheus:
+    image: prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - prometheus-config:/etc/prometheus:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      prometheus-config:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+      cadvisor:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3002:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  toolbox:
+    build:
+      context: ..
+      dockerfile: deployments/toolbox/Dockerfile
+    profiles: ["tools"]
+    working_dir: /workspace
+    command: sleep infinity
+    volumes:
+      - ..:/workspace
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
+  seed-card-dataset-runner:
+    build:
+      context: ..
+      dockerfile: deployments/toolbox/Dockerfile
+    profiles: ["tools"]
+    working_dir: /workspace
+    entrypoint: ["sh", "-lc"]
+    command: ["go run ./cmd/seed-card-dataset " ]
+    volumes:
+      - ..:/workspace
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
+  e2e-load-runner:
+    build:
+      context: ..
+      dockerfile: deployments/toolbox/Dockerfile
+    profiles: ["tools"]
+    working_dir: /workspace
+    entrypoint: ["sh", "-lc"]
+    command: ["go run ./cmd/e2e-load-runner " ]
+    volumes:
+      - ..:/workspace
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
+  component-load-runner:
+    build:
+      context: ..
+      dockerfile: deployments/toolbox/Dockerfile
+    profiles: ["tools"]
+    working_dir: /workspace
+    entrypoint: ["sh", "-lc"]
+    command: ["go run ./cmd/component-load-runner " ]
+    volumes:
+      - ..:/workspace
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
 volumes:
   pgdata:
+  prometheus-config:
+  gomodcache:
+  gobuildcache:

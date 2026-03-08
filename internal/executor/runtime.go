@@ -38,18 +38,21 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 
 	kafkaBrokers := bootstrap.KafkaBrokers()
 	smsProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicSendSMS, kafkapkg.ProducerOptions{
-		RequiredAcks: kafka.RequireAll,
+		RequiredAcks:    kafka.RequireAll,
+		RequiredAcksSet: true,
 	}, logger.Named("sms-producer"))
 	defer smsProducer.Close()
 
 	logProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicMessageLog, kafkapkg.ProducerOptions{
-		RequiredAcks: kafka.RequireAll,
-		Async:        true,
+		RequiredAcks:    kafka.RequireAll,
+		RequiredAcksSet: true,
+		Async:           false,
 	}, logger.Named("log-producer"))
 	defer logProducer.Close()
 
 	eventProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicCardEvents, kafkapkg.ProducerOptions{
-		RequiredAcks: kafka.RequireAll,
+		RequiredAcks:    kafka.RequireAll,
+		RequiredAcksSet: true,
 	}, logger.Named("event-producer"))
 	defer eventProducer.Close()
 

@@ -55,7 +55,8 @@ func NewGateway(smppConfig smpp.Config, poolConfig smpp.PoolConfig, kafkaBrokers
 
 	// Create Kafka producer for card-events topic
 	s.eventProducer = kafkapkg.NewProducerWithOptions(kafkaBrokers, cardEventsTopic, kafkapkg.ProducerOptions{
-		RequiredAcks: kafka.RequireAll,
+		RequiredAcks:    kafka.RequireAll,
+		RequiredAcksSet: true,
 	}, logger.Named("event-producer"))
 
 	// Create SMPP pool with deliver handler

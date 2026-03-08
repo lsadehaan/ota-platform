@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,9 +39,9 @@ type CardWorker struct {
 	wsHub          WSHub
 	logger         *zap.Logger
 	telemetry      *executorTelemetry
-	cardKeyCache   sync.Map // cardID -> *keystore.CardKeyMaterial
-	profileCache   sync.Map // profileID -> *db.Profile
-	campaignCache  sync.Map // campaignID -> *campaignExecutionContext
+	cardKeyCache   *ttlCache[*keystore.CardKeyMaterial]
+	profileCache   *ttlCache[*db.Profile]
+	campaignCache  *ttlCache[*campaignExecutionContext]
 }
 
 type campaignExecutionContext struct {
@@ -65,6 +64,9 @@ func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb Coordin
 		wsHub:          wsHub,
 		logger:         logger,
 		telemetry:      newExecutorTelemetry(logger),
+		cardKeyCache:   newTTLCache[*keystore.CardKeyMaterial](15*time.Minute, 10000),
+		profileCache:   newTTLCache[*db.Profile](30*time.Minute, 1024),
+		campaignCache:  newTTLCache[*campaignExecutionContext](10*time.Minute, 2048),
 	}
 }
 
@@ -869,8 +871,8 @@ func (w *CardWorker) completeCampaign(ctx context.Context, campaignID string, st
 
 // loadProfileCached loads a card profile using cache-aside: try Redis first, fall back to DB.
 func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*db.Profile, error) {
-	if cached, ok := w.profileCache.Load(profileID); ok {
-		return cached.(*db.Profile), nil
+	if cached, ok := w.profileCache.Get(profileID); ok {
+		return cached, nil
 	}
 	var profile db.Profile
 	err := w.redis.GetCachedProfile(ctx, profileID, &profile)
@@ -878,7 +880,7 @@ func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*
 		w.logger.Warn("redis profile cache error", zap.Error(err))
 	}
 	if err == nil {
-		w.profileCache.Store(profileID, &profile)
+		w.profileCache.Set(profileID, &profile)
 		return &profile, nil
 	}
 	// Cache miss or error — load from DB.
@@ -886,7 +888,7 @@ func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*
 		return nil, fmt.Errorf("load profile %s: %w", profileID, err)
 	}
 	_ = w.redis.CacheProfile(ctx, profileID, &profile)
-	w.profileCache.Store(profileID, &profile)
+	w.profileCache.Set(profileID, &profile)
 	return &profile, nil
 }
 
@@ -965,21 +967,21 @@ func (w *CardWorker) loadCampaignCommands(ctx context.Context, campaignID string
 }
 
 func (w *CardWorker) loadCardKeys(ctx context.Context, cardID string) (*keystore.CardKeyMaterial, error) {
-	if cached, ok := w.cardKeyCache.Load(cardID); ok {
-		return cached.(*keystore.CardKeyMaterial), nil
+	if cached, ok := w.cardKeyCache.Get(cardID); ok {
+		return cached, nil
 	}
 
 	keys, err := w.keyStore.GetKeys(ctx, cardID)
 	if err != nil {
 		return nil, err
 	}
-	w.cardKeyCache.Store(cardID, keys)
+	w.cardKeyCache.Set(cardID, keys)
 	return keys, nil
 }
 
 func (w *CardWorker) loadCampaignContext(ctx context.Context, campaignID string) (*campaignExecutionContext, error) {
-	if cached, ok := w.campaignCache.Load(campaignID); ok {
-		return cached.(*campaignExecutionContext), nil
+	if cached, ok := w.campaignCache.Get(campaignID); ok {
+		return cached, nil
 	}
 
 	commands, err := w.loadCampaignCommands(ctx, campaignID)
@@ -1001,7 +1003,7 @@ func (w *CardWorker) loadCampaignContext(ctx context.Context, campaignID string)
 		commandByStep: commandByStep,
 		params:        params,
 	}
-	w.campaignCache.Store(campaignID, campaignCtx)
+	w.campaignCache.Set(campaignID, campaignCtx)
 	return campaignCtx, nil
 }
 
