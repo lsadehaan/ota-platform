@@ -435,20 +435,23 @@ func (c *Client) enquireLinkLoop() {
 	}
 }
 
-// handleDisconnect marks the client as unbound after an unexpected disconnection.
+const deliverWorkers = 8
+
 func (c *Client) startDeliverLoop() {
-	go func(done <-chan struct{}, q <-chan deliverMessage) {
-		for {
-			select {
-			case <-done:
-				return
-			case msg := <-q:
-				if c.handler != nil {
-					c.handler(msg.sourceAddr, msg.destAddr, msg.esmClass, msg.payload)
+	for i := 0; i < deliverWorkers; i++ {
+		go func(done <-chan struct{}, q <-chan deliverMessage) {
+			for {
+				select {
+				case <-done:
+					return
+				case msg := <-q:
+					if c.handler != nil {
+						c.handler(msg.sourceAddr, msg.destAddr, msg.esmClass, msg.payload)
+					}
 				}
 			}
-		}
-	}(c.done, c.deliverQ)
+		}(c.done, c.deliverQ)
+	}
 }
 
 func (c *Client) enqueueDeliver(msg deliverMessage) {

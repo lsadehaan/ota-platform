@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -43,7 +44,8 @@ type CardWorker struct {
 	cardKeyCache   *ttlCache[*keystore.CardKeyMaterial]
 	profileCache   *ttlCache[*db.Profile]
 	campaignCache  *ttlCache[*campaignExecutionContext]
-	retryWg        sync.WaitGroup
+	retryWg           sync.WaitGroup
+	completionCounter atomic.Int64
 }
 
 type campaignExecutionContext struct {
@@ -804,9 +806,22 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 	return w.eventProducer.Publish(ctx, event.CardID, nextEvent)
 }
 
+// completionCheckInterval controls how often we query campaign stats to detect
+// completion. Checking every card is wasteful at scale — we sample every Nth
+// terminal event instead. The exact value is a heuristic; the reconciler
+// catches any campaigns missed by sampling.
+const completionCheckInterval = 50
+
 // checkCampaignComplete checks if all cards are done and updates campaign status.
+// To avoid an expensive ScyllaDB read on every terminal card event, only checks
+// every completionCheckInterval-th event. The reconciler catches any stragglers.
 func (w *CardWorker) checkCampaignComplete(ctx context.Context, campaignID string) {
 	if w.execution == nil {
+		return
+	}
+
+	n := w.completionCounter.Add(1)
+	if n%completionCheckInterval != 0 {
 		return
 	}
 
