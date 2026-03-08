@@ -13,8 +13,10 @@ import (
 )
 
 const (
-	cardEventsGroupID = "card-workers"
-	defaultWorkers    = 16
+	activateGroupID = "card-activate-workers"
+	dlrGroupID      = "card-dlr-workers"
+	moGroupID       = "card-mo-workers"
+	defaultWorkers  = 16
 )
 
 // ConsumerManager manages per-topic Kafka consumers for the card executor.
@@ -46,7 +48,7 @@ func NewConsumerManager(brokers []string, cardWorker *CardWorker, logger *zap.Lo
 	cm.activateConsumer = kafkapkg.NewConcurrentConsumer(
 		brokers,
 		contractevents.TopicCardActivate,
-		cardEventsGroupID,
+		activateGroupID,
 		workers,
 		cardWorker.HandleEvent,
 		logger.Named("activate-consumer"),
@@ -55,7 +57,7 @@ func NewConsumerManager(brokers []string, cardWorker *CardWorker, logger *zap.Lo
 	cm.dlrConsumer = kafkapkg.NewConcurrentConsumer(
 		brokers,
 		contractevents.TopicCardDLR,
-		cardEventsGroupID,
+		dlrGroupID,
 		workers,
 		cardWorker.HandleEvent,
 		logger.Named("dlr-consumer"),
@@ -64,7 +66,7 @@ func NewConsumerManager(brokers []string, cardWorker *CardWorker, logger *zap.Lo
 	cm.moConsumer = kafkapkg.NewConcurrentConsumer(
 		brokers,
 		contractevents.TopicCardMO,
-		cardEventsGroupID,
+		moGroupID,
 		workers,
 		cardWorker.HandleEvent,
 		logger.Named("mo-consumer"),
