@@ -76,7 +76,7 @@ func (a *API) ListCampaigns(c *gin.Context) {
 		query = query.Where("status = ?", status)
 	}
 	if search := c.Query("search"); search != "" {
-		query = query.Where("name ILIKE ? ESCAPE '\\\\'", "%"+escapeLike(search)+"%")
+		query = query.Where("name ILIKE ? ESCAPE '\\'", "%"+escapeLike(search)+"%")
 	}
 
 	var total int64

@@ -59,7 +59,7 @@ func (a *API) ListCards(c *gin.Context) {
 
 	if search := c.Query("q"); search != "" {
 		escaped := escapeLike(search)
-		query = query.Where("iccid ILIKE ? ESCAPE '\\\\' OR imsi ILIKE ? ESCAPE '\\\\' OR msisdn ILIKE ? ESCAPE '\\\\'",
+		query = query.Where("iccid ILIKE ? ESCAPE '\\' OR imsi ILIKE ? ESCAPE '\\' OR msisdn ILIKE ? ESCAPE '\\'",
 			"%"+escaped+"%", "%"+escaped+"%", "%"+escaped+"%")
 	}
 	if profileID := c.Query("profile_id"); profileID != "" {

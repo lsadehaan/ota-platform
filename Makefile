@@ -10,6 +10,7 @@ build:
 	go build -o bin/db-migrate ./cmd/db-migrate
 	go build -o bin/kafka-init ./cmd/kafka-init
 	go build -o bin/benchmark-runner ./cmd/benchmark-runner
+	go build -o bin/component-load-runner ./cmd/component-load-runner
 	go build -o bin/e2e-load-runner ./cmd/e2e-load-runner
 	go build -o bin/mock-smsc ./cmd/mock-smsc
 
@@ -75,3 +76,6 @@ web-dev:
 
 web-build:
 	cd web && npm run build
+
+run-component-load:
+	go run ./cmd/component-load-runner
