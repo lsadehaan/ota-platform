@@ -46,7 +46,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		Addr:         ":" + port,
 		Handler:      router,
 		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 5 * time.Minute,
 		IdleTimeout:  120 * time.Second,
 	}
 

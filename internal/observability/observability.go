@@ -78,7 +78,7 @@ func Init(ctx context.Context, serviceName string, logger *zap.Logger) (Shutdown
 	meterProvider := sdkmetric.NewMeterProvider(
 		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(
 			metricExporter,
-			sdkmetric.WithInterval(15*time.Second),
+			sdkmetric.WithInterval(5*time.Second),
 		)),
 		sdkmetric.WithResource(resourceAttrs),
 	)

@@ -10,9 +10,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/url"
 	"os"
-	"sort"
 	"strconv"
 	"testing"
 	"time"
@@ -43,15 +41,6 @@ type campaignCreateEnvelope struct {
 		ID string `json:"id"`
 	} `json:"data"`
 	StartError string `json:"start_error"`
-}
-
-type cardsListEnvelope struct {
-	Data []struct {
-		ID string `json:"id"`
-	} `json:"data"`
-	Total      int `json:"total"`
-	Page       int `json:"page"`
-	TotalPages int `json:"total_pages"`
 }
 
 type campaignDetail struct {
@@ -93,8 +82,8 @@ func TestLocalStackCampaignLifecycle(t *testing.T) {
 
 	prefix := fmt.Sprintf("e2e-%d", time.Now().UnixNano())
 	profileID, appID := createProfileAndApplication(t, client, prefix, porProtocol)
-	cardIDs := createCards(t, client, prefix, profileID, cardCount)
-	campaignID := createCampaign(t, client, prefix, appID, cardIDs, expectResponse)
+	createCards(t, client, prefix, profileID, cardCount)
+	campaignID := createCampaignByProfile(t, client, prefix, appID, profileID, expectResponse)
 
 	wallStart := time.Now()
 	campaign := waitForCampaignTerminal(t, client, campaignID, campaignTimeout)
@@ -181,26 +170,20 @@ func createProfileAndApplication(t *testing.T, client *apiClient, prefix, porPro
 	return resp.Data.ID, resp.Data.Applications[0].ID
 }
 
-func createCards(t *testing.T, client *apiClient, prefix, profileID string, count int) []string {
+func createCards(t *testing.T, client *apiClient, prefix, profileID string, count int) {
 	t.Helper()
 	if count >= 500 {
 		profileName := prefix + "-profile"
 		if err := importCardsCSV(t, client, prefix, profileName, count); err != nil {
 			t.Fatalf("import cards: %v", err)
 		}
-		ids, err := listCardIDsByPrefix(t, client, prefix, count)
-		if err != nil {
-			t.Fatalf("list imported cards: %v", err)
-		}
-		return ids
+		return
 	}
-	ids := make([]string, 0, count)
-	baseMSISDN := int(time.Now().UnixNano()%900000 + 100000)
 	for i := 0; i < count; i++ {
 		body := map[string]any{
 			"iccid":      fmt.Sprintf("%s-iccid-%06d", prefix, i),
 			"imsi":       fmt.Sprintf("%s-imsi-%06d", prefix, i),
-			"msisdn":     fmt.Sprintf("447700%06d", (baseMSISDN+i)%1000000),
+			"msisdn":     fmt.Sprintf("%s-msisdn-%06d", prefix, i),
 			"profile_id": profileID,
 			"enc_key":    "404142434445464748494A4B4C4D4E4F",
 			"auth_key":   "505152535455565758595A5B5C5D5E5F",
@@ -211,9 +194,7 @@ func createCards(t *testing.T, client *apiClient, prefix, profileID string, coun
 		if resp.Data.ID == "" {
 			t.Fatalf("empty card id in create response for card %d", i)
 		}
-		ids = append(ids, resp.Data.ID)
 	}
-	return ids
 }
 
 func importCardsCSV(t *testing.T, client *apiClient, prefix, profileName string, count int) error {
@@ -225,12 +206,11 @@ func importCardsCSV(t *testing.T, client *apiClient, prefix, profileName string,
 		return err
 	}
 
-	baseMSISDN := int(time.Now().UnixNano()%900000 + 100000)
 	for i := 0; i < count; i++ {
 		if err := w.Write([]string{
 			fmt.Sprintf("%s-iccid-%06d", prefix, i),
 			fmt.Sprintf("%s-imsi-%06d", prefix, i),
-			fmt.Sprintf("447700%06d", (baseMSISDN+i)%1000000),
+			fmt.Sprintf("%s-msisdn-%06d", prefix, i),
 			profileName,
 			"404142434445464748494A4B4C4D4E4F",
 			"505152535455565758595A5B5C5D5E5F",
@@ -262,7 +242,8 @@ func importCardsCSV(t *testing.T, client *apiClient, prefix, profileName string,
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
-	resp, err := client.http.Do(req)
+	importClient := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := importClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -275,39 +256,13 @@ func importCardsCSV(t *testing.T, client *apiClient, prefix, profileName string,
 	return nil
 }
 
-func listCardIDsByPrefix(t *testing.T, client *apiClient, prefix string, expected int) ([]string, error) {
-	t.Helper()
 
-	page := 1
-	ids := make([]string, 0, expected)
-	for {
-		var resp cardsListEnvelope
-		path := fmt.Sprintf("/api/v1/cards?q=%s&page=%d&page_size=100", url.QueryEscape(prefix), page)
-		if err := getJSONE(client, path, http.StatusOK, &resp); err != nil {
-			return nil, err
-		}
-		for _, card := range resp.Data {
-			ids = append(ids, card.ID)
-		}
-		if page >= resp.TotalPages || len(resp.Data) == 0 {
-			break
-		}
-		page++
-	}
-
-	sort.Strings(ids)
-	if len(ids) < expected {
-		return nil, fmt.Errorf("listed %d cards, expected at least %d", len(ids), expected)
-	}
-	return ids[:expected], nil
-}
-
-func createCampaign(t *testing.T, client *apiClient, prefix, appID string, cardIDs []string, expectResponse bool) string {
+func createCampaignByProfile(t *testing.T, client *apiClient, prefix, appID, profileID string, expectResponse bool) string {
 	t.Helper()
 	body := map[string]any{
 		"name":              prefix + "-campaign",
 		"campaign_type":     "script",
-		"card_ids":          cardIDs,
+		"profile_id":       profileID,
 		"max_retries":       1,
 		"start_immediately": true,
 		"commands": []map[string]any{{

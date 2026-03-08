@@ -17,6 +17,7 @@ type executorTelemetry struct {
 	eventsProcessed    metric.Int64Counter
 	cardsProcessed     metric.Int64Counter
 	retries            metric.Int64Counter
+	dedupeErrors       metric.Int64Counter
 	processingDuration metric.Float64Histogram
 }
 
@@ -47,6 +48,14 @@ func newExecutorTelemetry(logger *zap.Logger) *executorTelemetry {
 		logger.Warn("create executor retries metric", zap.Error(err))
 	}
 
+	dedupeErrors, err := meter.Int64Counter(
+		"ota.executor.dedupe_errors",
+		metric.WithDescription("Deduplication check failures (fail-open events)"),
+	)
+	if err != nil {
+		logger.Warn("create executor dedupe_errors metric", zap.Error(err))
+	}
+
 	processingDuration, err := meter.Float64Histogram(
 		"ota.executor.processing_duration_ms",
 		metric.WithDescription("Executor event processing duration in milliseconds"),
@@ -60,6 +69,7 @@ func newExecutorTelemetry(logger *zap.Logger) *executorTelemetry {
 		eventsProcessed:    eventsProcessed,
 		cardsProcessed:     cardsProcessed,
 		retries:            retries,
+		dedupeErrors:       dedupeErrors,
 		processingDuration: processingDuration,
 	}
 }
@@ -104,6 +114,15 @@ func (t *executorTelemetry) recordCardProcessed(ctx context.Context, outcome str
 	}
 	if t.cardsProcessed != nil {
 		t.cardsProcessed.Add(ctx, 1, metric.WithAttributes(attribute.String("ota.outcome", outcome)))
+	}
+}
+
+func (t *executorTelemetry) recordDedupeError(ctx context.Context) {
+	if t == nil {
+		return
+	}
+	if t.dedupeErrors != nil {
+		t.dedupeErrors.Add(ctx, 1)
 	}
 }
 

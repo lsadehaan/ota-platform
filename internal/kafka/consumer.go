@@ -276,7 +276,12 @@ func (cc *ConcurrentConsumer) Start(ctx context.Context) error {
 			if ctx.Err() != nil {
 				break
 			}
-			cc.logger.Error("fetch error", zap.Error(err))
+			cc.logger.Error("failed to fetch kafka message", zap.Error(err))
+			select {
+			case <-ctx.Done():
+				break
+			case <-time.After(250 * time.Millisecond):
+			}
 			continue
 		}
 

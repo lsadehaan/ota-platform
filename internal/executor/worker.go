@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,6 +43,7 @@ type CardWorker struct {
 	cardKeyCache   *ttlCache[*keystore.CardKeyMaterial]
 	profileCache   *ttlCache[*db.Profile]
 	campaignCache  *ttlCache[*campaignExecutionContext]
+	retryWg        sync.WaitGroup
 }
 
 type campaignExecutionContext struct {
@@ -87,6 +89,7 @@ func (w *CardWorker) HandleEvent(ctx context.Context, key []byte, value []byte) 
 	isNew, err := w.redis.CheckAndSetDedupe(ctx, event.EventID)
 	if err != nil {
 		w.logger.Warn("dedupe check failed, proceeding anyway", zap.Error(err))
+		w.telemetry.recordDedupeError(ctx)
 	} else if !isNew {
 		w.logger.Debug("duplicate event, skipping", zap.String("event_id", event.EventID))
 		return nil
@@ -281,7 +284,9 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 				return &entry
 			}(),
 		}
-		_ = w.logProducer.Publish(ctx, event.CardID, failCreate)
+		if logErr := w.logProducer.Publish(ctx, event.CardID, failCreate); logErr != nil {
+			w.logger.Warn("failed to publish message log (send_failed)", zap.Error(logErr))
+		}
 		return fmt.Errorf("publish SMS to kafka: %w", err)
 	}
 
@@ -373,7 +378,9 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 				"smpp_message_id": event.SMPPMessageID,
 			},
 		}
-		_ = w.logProducer.Publish(ctx, event.CardID, dlrUpdate)
+		if logErr := w.logProducer.Publish(ctx, event.CardID, dlrUpdate); logErr != nil {
+			w.logger.Warn("failed to publish message log (dlr update)", zap.Error(logErr))
+		}
 	}
 
 	// 3. Broadcast DLR update via WebSocket.
@@ -543,7 +550,9 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 }
 
 func (w *CardWorker) scheduleActivateRetry(ctx context.Context, event kafkapkg.CardEvent, delay time.Duration, reason string) {
+	w.retryWg.Add(1)
 	go func() {
+		defer w.retryWg.Done()
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 
@@ -564,6 +573,11 @@ func (w *CardWorker) scheduleActivateRetry(ctx context.Context, event kafkapkg.C
 			)
 		}
 	}()
+}
+
+// DrainRetries waits for all in-flight retry goroutines to complete.
+func (w *CardWorker) DrainRetries() {
+	w.retryWg.Wait()
 }
 
 // handleMO processes a mobile-originated response (PoR from SIM).
@@ -639,7 +653,9 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 			Status:     "received",
 		},
 	}
-	_ = w.logProducer.Publish(ctx, event.CardID, moLogAction)
+	if logErr := w.logProducer.Publish(ctx, event.CardID, moLogAction); logErr != nil {
+		w.logger.Warn("failed to publish message log (MO create)", zap.Error(logErr))
+	}
 
 	// Update MT entry with PoR data.
 	if state.LastMsgID != "" {
@@ -653,7 +669,9 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 				"status":          "processed",
 			},
 		}
-		_ = w.logProducer.Publish(ctx, event.CardID, mtUpdate)
+		if logErr := w.logProducer.Publish(ctx, event.CardID, mtUpdate); logErr != nil {
+			w.logger.Warn("failed to publish message log (MT update)", zap.Error(logErr))
+		}
 	}
 
 	// 7. Evaluate PoR status.

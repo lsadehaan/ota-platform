@@ -25,6 +25,9 @@ func (campaignTestStore) SetCampaignStatus(context.Context, string, string) erro
 
 type campaignTestQueryStore struct{}
 
+func (campaignTestQueryStore) GetCardState(context.Context, uuid.UUID) (*scyllastore.CardStateRecord, error) {
+	return nil, nil
+}
 func (campaignTestQueryStore) CampaignStats(context.Context, uuid.UUID) (scyllastore.CampaignStats, error) {
 	return scyllastore.CampaignStats{}, nil
 }
@@ -85,6 +88,9 @@ type trackingCampaignQueryStore struct {
 	initializeCards int
 }
 
+func (s *trackingCampaignQueryStore) GetCardState(context.Context, uuid.UUID) (*scyllastore.CardStateRecord, error) {
+	return nil, nil
+}
 func (s *trackingCampaignQueryStore) CampaignStats(context.Context, uuid.UUID) (scyllastore.CampaignStats, error) {
 	return scyllastore.CampaignStats{}, nil
 }
