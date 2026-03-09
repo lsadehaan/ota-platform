@@ -17,7 +17,7 @@ services:
   campaign-planner:
     environment:
       PLANNER_CLAIM_BATCH_SIZE: "5000"
-      PLANNER_POLL_INTERVAL_MS: "100"
+      PLANNER_POLL_INTERVAL_MS: "250"
       DB_MAX_OPEN_CONNS: "8"
       DB_MAX_IDLE_CONNS: "2"
       KAFKA_PRODUCER_BATCH_SIZE: "10000"
