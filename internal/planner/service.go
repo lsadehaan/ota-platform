@@ -73,7 +73,7 @@ func plannerPollInterval() time.Duration {
 			return time.Duration(ms) * time.Millisecond
 		}
 	}
-	return 25 * time.Millisecond
+	return 500 * time.Millisecond
 }
 
 func plannerClaimBatchSize() int {
