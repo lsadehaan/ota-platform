@@ -1,5 +1,14 @@
 # Go
 /bin/
+/card-executor
+/ota-api
+/campaign-planner
+/sms-gateway
+/read-model-projector
+/reconciler
+/mock-smsc
+/kafka-init
+/db-migrate
 *.exe
 *.exe~
 *.dll
