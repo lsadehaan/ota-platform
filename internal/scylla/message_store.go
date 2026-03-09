@@ -35,7 +35,23 @@ func NewMessageLogStore(client *Client) *MessageLogStore {
 	return &MessageLogStore{client: client}
 }
 
-func (s *MessageLogStore) CreateBatch(ctx context.Context, logs []db.MessageLog, _ int) error {
+func (s *MessageLogStore) CreateBatch(ctx context.Context, logs []db.MessageLog, chunkSize int) error {
+	if chunkSize <= 0 || chunkSize > 100 {
+		chunkSize = 100
+	}
+	for start := 0; start < len(logs); start += chunkSize {
+		end := start + chunkSize
+		if end > len(logs) {
+			end = len(logs)
+		}
+		if err := s.createBatchChunk(ctx, logs[start:end]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *MessageLogStore) createBatchChunk(ctx context.Context, logs []db.MessageLog) error {
 	batch := s.client.Session().NewBatch(gocql.UnloggedBatch).WithContext(ctx)
 	counterBatch := s.client.Session().NewBatch(gocql.CounterBatch).WithContext(ctx)
 	for _, log := range logs {

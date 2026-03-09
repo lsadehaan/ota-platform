@@ -41,6 +41,6 @@ type QueryStore interface {
 	CampaignErrorSummary(ctx context.Context, campaignID uuid.UUID, since time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error)
 }
 
-func NewAPI(database *gorm.DB, campaignSvc *CampaignService, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *API {
-	return newAPI(database, campaignSvc, queryStore, wsHub, logger)
+func NewAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *API {
+	return newAPI(database, rdb, campaignSvc, queryStore, wsHub, logger)
 }

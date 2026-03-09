@@ -10,6 +10,7 @@ const (
 	TopicTransportEvents = "transport-events"
 	TopicExecutionEvents = "execution-events"
 	TopicMessageLog      = "message-log"
+	TopicCardStateLog    = "card-state-log"
 )
 
 const (

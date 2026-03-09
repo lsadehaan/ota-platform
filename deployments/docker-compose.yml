@@ -177,10 +177,14 @@ services:
     environment:
       DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      SCYLLA_HOSTS: scylla
+      SCYLLA_KEYSPACE: ota_execution
     depends_on:
       db-migrate:
         condition: service_completed_successfully
       postgres:
+        condition: service_healthy
+      scylla:
         condition: service_healthy
 
   sms-gateway:
@@ -230,6 +234,16 @@ services:
       NEXT_PUBLIC_GRAFANA_URL: http://localhost:3002
     depends_on:
       - ota-api
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1

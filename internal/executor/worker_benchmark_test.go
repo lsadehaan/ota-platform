@@ -77,6 +77,12 @@ type benchmarkProducer struct{}
 func (benchmarkProducer) Publish(context.Context, string, interface{}) error { return nil }
 func (benchmarkProducer) Close() error                                       { return nil }
 
+type benchmarkCardStateWriter struct{}
+
+func (benchmarkCardStateWriter) WriteCardState(context.Context, kafkapkg.CardStateChange) error {
+	return nil
+}
+
 type benchmarkExecutionStore struct{}
 
 func (benchmarkExecutionStore) UpdateCampaignCard(context.Context, string, string, map[string]interface{}) error {
@@ -128,7 +134,7 @@ func BenchmarkHandleActivate(b *testing.B) {
 		},
 	}
 
-	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, ks, nil, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, nil, zap.NewNop())
+	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, ks, nil, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, benchmarkCardStateWriter{}, nil, zap.NewNop())
 	payload, err := json.Marshal(kafkapkg.CardEvent{
 		Type:       "card.activate",
 		EventID:    "evt-1",

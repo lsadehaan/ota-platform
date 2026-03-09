@@ -23,8 +23,9 @@ lint:
 benchmarks:
 	go run ./cmd/benchmark-runner -output benchmark-report.md
 
+E2E_TEST_TIMEOUT ?= 30m
 e2e-test:
-	go test -tags=e2e ./e2e -v -count=1
+	go test -tags=e2e ./e2e -v -count=1 -timeout=$(E2E_TEST_TIMEOUT)
 
 e2e-load:
 	go run ./cmd/e2e-load-runner

@@ -31,8 +31,6 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	}()
 
 	database := bootstrap.MustGormDB(logger)
-	scylla := bootstrap.MustScylla(logger)
-	defer scylla.Close()
 	rdb := bootstrap.MustCoordinationStore(logger)
 	defer rdb.Close()
 
@@ -46,7 +44,6 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	logProducer := kafkapkg.NewProducerWithOptions(kafkaBrokers, contractevents.TopicMessageLog, kafkapkg.ProducerOptions{
 		RequiredAcks:    kafka.RequireOne,
 		RequiredAcksSet: true,
-		Async:           true,
 	}, logger.Named("log-producer"))
 	defer logProducer.Close()
 
@@ -55,6 +52,10 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		RequiredAcksSet: true,
 	}, logger.Named("activate-producer"))
 	defer activateProducer.Close()
+
+	scylla := bootstrap.MustScylla(logger)
+	defer scylla.Close()
+	cardStateStore := scyllastore.NewCardStateStore(scylla)
 
 	// Build keystore.
 	keyCfg := keystore.Config{
@@ -67,8 +68,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		return fmt.Errorf("build keystore: %w", err)
 	}
 
-	executionStore := scyllastore.NewExecutionStore(scylla, database)
-	cardWorker := NewService(database, executionStore, rdb, ks, cp, smsProducer, logProducer, activateProducer, nil, logger.Named("card-worker"))
+	cardWorker := NewService(database, nil, rdb, ks, cp, smsProducer, logProducer, activateProducer, cardStateStore, nil, logger.Named("card-worker"))
 	consumerMgr := NewConsumerManager(kafkaBrokers, cardWorker, logger.Named("consumer"))
 	defer consumerMgr.Close()
 

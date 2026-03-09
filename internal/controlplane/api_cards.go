@@ -11,9 +11,9 @@ import (
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 
 	"ota-platform/internal/db"
+	redispkg "ota-platform/internal/redis"
 	"ota-platform/pkg/hexutil"
 )
 
@@ -366,8 +366,11 @@ func (a *API) GetCardCounters(c *gin.Context) {
 }
 
 // ImportCards handles POST /api/v1/cards/import with CSV file upload.
+// Uses PostgreSQL COPY protocol for bulk inserts (5-10x faster than INSERT)
+// and pre-warms the Redis card key cache to avoid cold-start DB queries
+// when campaigns activate imported cards.
 func (a *API) ImportCards(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 100<<20)
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<30) // 1GB
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
 		errorResponse(c, http.StatusBadRequest, "file is required")
@@ -399,10 +402,26 @@ func (a *API) ImportCards(c *gin.Context) {
 		}
 	}
 
+	// Get a dedicated SQL connection for COPY operations (temp table needs
+	// same connection for its entire lifetime).
+	sqlDB, err := a.db.DB()
+	if err != nil {
+		a.logger.Error("failed to get sql.DB", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	conn, err := sqlDB.Conn(c.Request.Context())
+	if err != nil {
+		a.logger.Error("failed to get db connection", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "database error")
+		return
+	}
+	defer conn.Close()
+
 	// Cache profile name -> ID lookups
 	profileCache := make(map[string]uuid.UUID)
 
-	const batchSize = 2000
+	const batchSize = 5000
 
 	var created, skipped, errCount int
 	var errors []string
@@ -413,13 +432,40 @@ func (a *API) ImportCards(c *gin.Context) {
 		if len(batch) == 0 {
 			return nil
 		}
-		result := a.db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(batch, batchSize)
-		if result.Error != nil {
-			return result.Error
+
+		result, err := db.BulkInsertCards(c.Request.Context(), conn, batch)
+		if err != nil {
+			return err
 		}
-		inserted := int(result.RowsAffected)
-		created += inserted
-		skipped += len(batch) - inserted
+		created += int(result.Inserted)
+		skipped += int(result.Skipped)
+
+		// Pre-warm Redis card key cache for inserted cards.
+		if a.rdb != nil && len(result.InsertedIDs) > 0 {
+			insertedSet := make(map[uuid.UUID]struct{}, len(result.InsertedIDs))
+			for _, id := range result.InsertedIDs {
+				insertedSet[id] = struct{}{}
+			}
+
+			keysToCache := make(map[string]*redispkg.CardKeys, len(result.InsertedIDs))
+			for i := range batch {
+				if _, ok := insertedSet[batch[i].ID]; ok {
+					keysToCache[batch[i].ID.String()] = &redispkg.CardKeys{
+						EncKey:    batch[i].EncKey,
+						AuthKey:   batch[i].AuthKey,
+						KEK:       batch[i].KEK,
+						ProfileID: batch[i].ProfileID.String(),
+						MSISDN:    batch[i].MSISDN,
+					}
+				}
+			}
+
+			if err := a.rdb.BulkCacheCardKeys(c.Request.Context(), keysToCache); err != nil {
+				a.logger.Warn("failed to pre-warm card key cache", zap.Error(err))
+				// Non-fatal: keys will be loaded on demand.
+			}
+		}
+
 		batch = batch[:0]
 		return nil
 	}
@@ -492,6 +538,10 @@ func (a *API) ImportCards(c *gin.Context) {
 				errorResponse(c, http.StatusInternalServerError, "failed to import cards")
 				return
 			}
+
+			if lineNum%50000 == 0 {
+				a.logger.Info("import progress", zap.Int("lines", lineNum), zap.Int("created", created), zap.Int("skipped", skipped))
+			}
 		}
 	}
 
@@ -500,6 +550,12 @@ func (a *API) ImportCards(c *gin.Context) {
 		errorResponse(c, http.StatusInternalServerError, "failed to import cards")
 		return
 	}
+
+	a.logger.Info("card import complete",
+		zap.Int("created", created),
+		zap.Int("skipped", skipped),
+		zap.Int("errors", errCount),
+	)
 
 	c.JSON(http.StatusOK, gin.H{
 		"created": created,

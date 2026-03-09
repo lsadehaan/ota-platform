@@ -171,6 +171,12 @@ func (p *pipelineProducer) Publish(_ context.Context, _ string, message interfac
 
 func (p *pipelineProducer) Close() error { return nil }
 
+type pipelineCardStateWriter struct{}
+
+func (pipelineCardStateWriter) WriteCardState(context.Context, kafkapkg.CardStateChange) error {
+	return nil
+}
+
 type pipelineExecutionStore struct{}
 
 func (pipelineExecutionStore) UpdateCampaignCard(context.Context, string, string, map[string]interface{}) error {
@@ -295,7 +301,7 @@ func BenchmarkActivationPipeline(b *testing.B) {
 		smsProducer := &pipelineProducer{}
 		logProducer := &pipelineProducer{}
 		eventProducer := &pipelineProducer{}
-		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
+		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, pipelineCardStateWriter{}, nil, zap.NewNop())
 		plannerSvc := NewService(database, &executorBridgePublisher{worker: worker, ctx: context.Background()}, zap.NewNop())
 		projectorStore := &pipelineProjectorStore{}
 		gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, &pipelineProducer{}, coordination, zap.NewNop())
@@ -331,7 +337,7 @@ func BenchmarkActivationResponsePipeline(b *testing.B) {
 	smsProducer := &pipelineProducer{}
 	logProducer := &pipelineProducer{}
 	eventProducer := &pipelineProducer{}
-	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, nil, zap.NewNop())
+	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, pipelineCardStateWriter{}, nil, zap.NewNop())
 	bridge := &executorBridgePublisher{worker: worker, ctx: context.Background()}
 	gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, bridge, coordination, zap.NewNop())
 

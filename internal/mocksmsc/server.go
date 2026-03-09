@@ -262,17 +262,21 @@ func (s *Server) handleConnection(conn net.Conn) {
 			// Schedule DLR delivery after the configured delay.
 			success := rand.Float64() < s.config.DLRSuccessRate
 			go func(c net.Conn, mid string, src string, dest string, ok bool) {
+				// Add random jitter (0–100% of base delay) to prevent
+				// thundering herd when many submit_sm arrive in a burst.
+				jitter := time.Duration(rand.Int63n(int64(s.config.DLRDelayMs)+1)) * time.Millisecond
 				select {
 				case <-s.done:
 					return
-				case <-time.After(time.Duration(s.config.DLRDelayMs) * time.Millisecond):
+				case <-time.After(time.Duration(s.config.DLRDelayMs)*time.Millisecond + jitter):
 				}
 				s.sendDLR(c, mid, dest, ok)
 				if ok && s.config.EnableMO && len(s.config.MOPayload) > 0 {
+					moJitter := time.Duration(rand.Int63n(int64(s.config.MODelayMs)+1)) * time.Millisecond
 					select {
 					case <-s.done:
 						return
-					case <-time.After(time.Duration(s.config.MODelayMs) * time.Millisecond):
+					case <-time.After(time.Duration(s.config.MODelayMs)*time.Millisecond + moJitter):
 					}
 					s.sendMO(c, mid, dest, src, s.config.MOPayload)
 				}

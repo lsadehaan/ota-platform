@@ -38,7 +38,7 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 
 	queryStore := scyllastore.NewQueryStore(scylla)
 	campaignSvc := NewCampaignService(database, rdb, queryStore, wsHub, logger.Named("campaign"))
-	api := NewAPI(database, campaignSvc, queryStore, wsHub, logger.Named("api"))
+	api := NewAPI(database, rdb, campaignSvc, queryStore, wsHub, logger.Named("api"))
 	router := api.SetupRouter()
 
 	port := config.GetEnv("OTA_API_PORT", "8080")

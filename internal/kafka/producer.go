@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/segmentio/kafka-go"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 
 	"ota-platform/internal/config"
@@ -15,8 +17,9 @@ import (
 
 // Producer wraps a kafka-go writer for producing messages.
 type Producer struct {
-	writer *kafka.Writer
-	logger *zap.Logger
+	writer        *kafka.Writer
+	logger        *zap.Logger
+	publishErrors metric.Int64Counter
 }
 
 type ProducerOptions struct {
@@ -78,9 +81,15 @@ func NewProducerWithOptions(brokers []string, topic string, opts ProducerOptions
 		BatchSize:    opts.BatchSize,
 		BatchTimeout: opts.BatchTimeout,
 	}
+	meter := otel.Meter("kafka-producer")
+	publishErrors, _ := meter.Int64Counter("ota.kafka.publish_errors",
+		metric.WithDescription("Total Kafka publish errors"),
+	)
+
 	return &Producer{
-		writer: w,
-		logger: logger,
+		writer:        w,
+		logger:        logger,
+		publishErrors: publishErrors,
 	}
 }
 
@@ -103,6 +112,9 @@ func (p *Producer) Publish(ctx context.Context, key string, value interface{}) e
 	observability.InjectKafkaHeaders(ctx, &msg.Headers)
 
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {
+		if p.publishErrors != nil {
+			p.publishErrors.Add(ctx, 1)
+		}
 		p.logger.Error("failed to publish kafka message",
 			zap.String("topic", p.writer.Topic),
 			zap.String("key", key),
@@ -146,6 +158,9 @@ func (p *Producer) PublishBatch(ctx context.Context, items []BatchItem) error {
 	}
 
 	if err := p.writer.WriteMessages(ctx, msgs...); err != nil {
+		if p.publishErrors != nil {
+			p.publishErrors.Add(ctx, 1)
+		}
 		p.logger.Error("failed to publish kafka batch",
 			zap.String("topic", p.writer.Topic),
 			zap.Int("count", len(msgs)),
@@ -170,6 +185,9 @@ func (p *Producer) PublishRaw(ctx context.Context, key string, value []byte) err
 	observability.InjectKafkaHeaders(ctx, &msg.Headers)
 
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {
+		if p.publishErrors != nil {
+			p.publishErrors.Add(ctx, 1)
+		}
 		p.logger.Error("failed to publish raw kafka message",
 			zap.String("topic", p.writer.Topic),
 			zap.String("key", key),

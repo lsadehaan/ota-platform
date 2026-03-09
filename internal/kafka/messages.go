@@ -49,6 +49,20 @@ type CardEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// CardStateChange is published to the card-state-log topic for async projection.
+type CardStateChange struct {
+	CampaignID  string    `json:"campaign_id"`
+	CardID      string    `json:"card_id"`
+	Status      string    `json:"status"`
+	CurrentStep int       `json:"current_step,omitempty"`
+	RetryCount  int       `json:"retry_count,omitempty"`
+	LastMsgID   string    `json:"last_msg_id,omitempty"`
+	LastSMPPID  string    `json:"last_smpp_message_id,omitempty"`
+	LastError   string    `json:"last_error,omitempty"`
+	LastErrCode string    `json:"last_error_code,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
 // MessageLogAction represents the type of message log operation.
 type MessageLogAction struct {
 	Action string           `json:"action"` // "create" or "update"

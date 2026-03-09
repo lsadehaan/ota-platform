@@ -180,6 +180,48 @@ func (c *Client) CacheCardKeys(ctx context.Context, cardID string, keys *CardKey
 	return nil
 }
 
+// BulkCacheCardKeys pre-warms the Redis card key cache for multiple cards
+// using pipelining. This is used during card import to avoid cold-start
+// database queries when a campaign activates the cards.
+func (c *Client) BulkCacheCardKeys(ctx context.Context, keys map[string]*CardKeys) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	pipe := c.rdb.Pipeline()
+	for cardID, k := range keys {
+		j := cardKeysJSON{
+			EncKey:    hex.EncodeToString(k.EncKey),
+			AuthKey:   hex.EncodeToString(k.AuthKey),
+			KEK:       hex.EncodeToString(k.KEK),
+			ProfileID: k.ProfileID,
+			MSISDN:    k.MSISDN,
+		}
+		data, err := json.Marshal(j)
+		if err != nil {
+			continue
+		}
+		if c.aead != nil {
+			data, err = c.encryptData(data)
+			if err != nil {
+				continue
+			}
+		}
+		pipe.Set(ctx, cardKeysKey(cardID), data, 1*time.Hour)
+
+		if k.MSISDN != "" {
+			pipe.Set(ctx, "msisdn:"+k.MSISDN, cardID, 24*time.Hour)
+		}
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		c.logger.Warn("redis: bulk cache card keys pipeline error", zap.Error(err))
+		return err
+	}
+	return nil
+}
+
 // GetCardKeys retrieves cached card keys. Returns (nil, nil) on cache miss.
 func (c *Client) GetCardKeys(ctx context.Context, cardID string) (*CardKeys, error) {
 	key := cardKeysKey(cardID)

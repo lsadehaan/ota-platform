@@ -51,6 +51,10 @@ scrape_configs:
     static_configs:
       - targets: ['scylla:9180']
 
+  - job_name: node-exporter
+    static_configs:
+      - targets: ['node-exporter:9100']
+
   - job_name: cadvisor
     static_configs:
       - targets: ['cadvisor:8080']

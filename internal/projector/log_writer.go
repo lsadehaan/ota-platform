@@ -36,6 +36,7 @@ type LogWriter struct {
 	tracer        trace.Tracer
 	actionsTotal  metric.Int64Counter
 	flushDuration metric.Float64Histogram
+	writeRetries  metric.Int64Counter
 }
 
 type consumer interface {
@@ -53,6 +54,10 @@ func NewLogWriter(store MessageLogStore, brokers []string, logger *zap.Logger) *
 	flushDuration, err := meter.Float64Histogram("ota.projector.flush_duration_ms", metric.WithDescription("Projector flush duration in milliseconds"))
 	if err != nil {
 		logger.Warn("create projector flush_duration metric", zap.Error(err))
+	}
+	writeRetries, err := meter.Int64Counter("ota.projector.write_retries", metric.WithDescription("Total projector write retries"))
+	if err != nil {
+		logger.Warn("create projector write_retries metric", zap.Error(err))
 	}
 	flushWorkers := envInt("PROJECTOR_FLUSH_WORKERS", 8)
 	if flushWorkers <= 0 {
@@ -87,6 +92,7 @@ func NewLogWriter(store MessageLogStore, brokers []string, logger *zap.Logger) *
 		tracer:        otel.Tracer("read-model-projector"),
 		actionsTotal:  actionsTotal,
 		flushDuration: flushDuration,
+		writeRetries:  writeRetries,
 	}
 
 	workers := 16
@@ -161,8 +167,35 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context, incoming <-chan kafkapk
 			for _, create := range creates {
 				createSlice = append(createSlice, create)
 			}
-			if err := lw.store.CreateBatch(ctx, createSlice, lw.batchSize); err != nil {
-				lw.logger.Error("batch create message logs failed", zap.Int("count", len(createSlice)), zap.Error(err))
+			for attempt := 1; attempt <= 10; attempt++ {
+				err := lw.store.CreateBatch(ctx, createSlice, lw.batchSize)
+				if err == nil {
+					break
+				}
+				if lw.writeRetries != nil {
+					lw.writeRetries.Add(ctx, 1)
+				}
+				if attempt == 10 {
+					lw.logger.Error("batch create message logs failed after max retries, dropping batch",
+						zap.Int("count", len(createSlice)),
+						zap.Error(err),
+					)
+					break
+				}
+				lw.logger.Error("batch create message logs failed, retrying",
+					zap.Int("count", len(createSlice)),
+					zap.Int("attempt", attempt),
+					zap.Error(err),
+				)
+				backoff := time.Duration(attempt) * 500 * time.Millisecond
+				if backoff > 10*time.Second {
+					backoff = 10 * time.Second
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
 			}
 			clear(creates)
 		}
@@ -171,8 +204,35 @@ func (lw *LogWriter) batchWriteLoop(ctx context.Context, incoming <-chan kafkapk
 			for _, update := range updates {
 				updateSlice = append(updateSlice, update)
 			}
-			if err := lw.store.ApplyUpdates(ctx, updateSlice); err != nil {
-				lw.logger.Error("batch update message logs failed", zap.Int("count", len(updateSlice)), zap.Error(err))
+			for attempt := 1; attempt <= 10; attempt++ {
+				err := lw.store.ApplyUpdates(ctx, updateSlice)
+				if err == nil {
+					break
+				}
+				if lw.writeRetries != nil {
+					lw.writeRetries.Add(ctx, 1)
+				}
+				if attempt == 10 {
+					lw.logger.Error("batch update message logs failed after max retries, dropping batch",
+						zap.Int("count", len(updateSlice)),
+						zap.Error(err),
+					)
+					break
+				}
+				lw.logger.Error("batch update message logs failed, retrying",
+					zap.Int("count", len(updateSlice)),
+					zap.Int("attempt", attempt),
+					zap.Error(err),
+				)
+				backoff := time.Duration(attempt) * 500 * time.Millisecond
+				if backoff > 10*time.Second {
+					backoff = 10 * time.Second
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(backoff):
+				}
 			}
 			clear(updates)
 		}

@@ -3,7 +3,6 @@ package kafka
 import (
 	"context"
 	"errors"
-	"sort"
 	"sync"
 	"time"
 
@@ -17,11 +16,19 @@ import (
 const maxRetries = 3
 
 func consumerMaxWait() time.Duration {
-	ms := config.GetEnvInt("KAFKA_CONSUMER_MAX_WAIT_MS", 50)
+	ms := config.GetEnvInt("KAFKA_CONSUMER_MAX_WAIT_MS", 500)
 	if ms <= 0 {
-		ms = 50
+		ms = 500
 	}
 	return time.Duration(ms) * time.Millisecond
+}
+
+func consumerMinBytes() int {
+	n := config.GetEnvInt("KAFKA_CONSUMER_MIN_BYTES", 10240)
+	if n <= 0 {
+		n = 10240
+	}
+	return n
 }
 
 func consumerQueueCapacity() int {
@@ -69,7 +76,7 @@ func NewConsumerWithOptions(brokers []string, topic string, groupID string, opts
 		Brokers:       brokers,
 		Topic:         topic,
 		GroupID:       groupID,
-		MinBytes:      1,
+		MinBytes:      consumerMinBytes(),
 		MaxBytes:      10e6, // 10 MB
 		MaxWait:       consumerMaxWait(),
 		QueueCapacity: consumerQueueCapacity(),
@@ -178,7 +185,7 @@ func (c *Consumer) Close() error {
 type partitionTracker struct {
 	mu        sync.Mutex
 	completed map[int64]bool // offsets that finished processing
-	committed int64          // highest committed offset (-1 means none)
+	committed int64          // highest committed offset
 }
 
 // ConcurrentConsumer processes Kafka messages using a pool of worker goroutines.
@@ -190,6 +197,13 @@ type ConcurrentConsumer struct {
 	handler func(ctx context.Context, key []byte, value []byte) error
 	workers int
 	logger  *zap.Logger
+
+	// partitionAnchors records the first offset dispatched to a worker for
+	// each partition.  The commit loop uses this to initialise each
+	// partitionTracker so the contiguous-offset walk starts from the
+	// correct position rather than from offset 0.
+	anchorMu         sync.Mutex
+	partitionAnchors map[int]int64
 }
 
 // NewConcurrentConsumer creates a consumer with N worker goroutines.
@@ -204,7 +218,7 @@ func NewConcurrentConsumerWithOptions(brokers []string, topic, groupID string, w
 		Brokers:        brokers,
 		Topic:          topic,
 		GroupID:        groupID,
-		MinBytes:       1,
+		MinBytes:       consumerMinBytes(),
 		MaxBytes:       10e6,
 		MaxWait:        consumerMaxWait(),
 		QueueCapacity:  consumerQueueCapacity(),
@@ -212,10 +226,11 @@ func NewConcurrentConsumerWithOptions(brokers []string, topic, groupID string, w
 		StartOffset:    consumerStartOffset(opts),
 	})
 	return &ConcurrentConsumer{
-		reader:  reader,
-		handler: handler,
-		workers: workers,
-		logger:  logger,
+		reader:           reader,
+		handler:          handler,
+		workers:          workers,
+		logger:           logger,
+		partitionAnchors: make(map[int]int64),
 	}
 }
 
@@ -285,6 +300,14 @@ func (cc *ConcurrentConsumer) Start(ctx context.Context) error {
 			continue
 		}
 
+		// Record the first offset dispatched per partition so the commit
+		// loop knows where the contiguous walk should start.
+		cc.anchorMu.Lock()
+		if _, ok := cc.partitionAnchors[msg.Partition]; !ok {
+			cc.partitionAnchors[msg.Partition] = msg.Offset
+		}
+		cc.anchorMu.Unlock()
+
 		// Route by key hash (FNV) — ensures per-key ordering
 		h := fnv32(msg.Key)
 		workerChs[h%uint32(cc.workers)] <- msg
@@ -339,12 +362,20 @@ func (cc *ConcurrentConsumer) commitLoop(ctx context.Context, commitCh <-chan ka
 	defer ticker.Stop()
 
 	// getTracker returns or creates a tracker for the given partition.
+	// It initialises committed to (first dispatched offset − 1) so the
+	// contiguous walk starts from the correct position.
 	getTracker := func(partition int) *partitionTracker {
 		t, ok := trackers[partition]
 		if !ok {
+			anchor := int64(-1)
+			cc.anchorMu.Lock()
+			if a, exists := cc.partitionAnchors[partition]; exists {
+				anchor = a - 1
+			}
+			cc.anchorMu.Unlock()
 			t = &partitionTracker{
 				completed: make(map[int64]bool),
-				committed: -1,
+				committed: anchor,
 			}
 			trackers[partition] = t
 		}
@@ -370,8 +401,6 @@ func (cc *ConcurrentConsumer) commitLoop(ctx context.Context, commitCh <-chan ka
 			t.mu.Lock()
 			t.completed[msg.Offset] = true
 			t.mu.Unlock()
-
-			cc.flushPartition(ctx, msg.Partition, t)
 
 		case <-ticker.C:
 			flushAll()
@@ -425,12 +454,7 @@ func (cc *ConcurrentConsumer) flushPartition(ctx context.Context, partition int,
 	)
 
 	// Clean up completed offsets that have been committed.
-	offsets := make([]int64, 0, len(t.completed))
 	for o := range t.completed {
-		offsets = append(offsets, o)
-	}
-	sort.Slice(offsets, func(i, j int) bool { return offsets[i] < offsets[j] })
-	for _, o := range offsets {
 		if o <= highWater {
 			delete(t.completed, o)
 		}

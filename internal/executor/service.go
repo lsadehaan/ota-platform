@@ -5,6 +5,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	kafkapkg "ota-platform/internal/kafka"
 	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
 )
@@ -45,10 +46,15 @@ type Producer interface {
 	Close() error
 }
 
+// CardStateWriter writes card state changes directly to ScyllaDB.
+type CardStateWriter interface {
+	WriteCardState(ctx context.Context, ev kafkapkg.CardStateChange) error
+}
+
 // Service is the executor service type.
 type Service = CardWorker
 
 // NewService constructs the executor service.
-func NewService(database *gorm.DB, executionStore ExecutionStore, store CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, wsHub WSHub, logger *zap.Logger) *Service {
-	return NewCardWorker(database, executionStore, store, ks, cp, smsProducer, logProducer, eventProducer, wsHub, logger)
+func NewService(database *gorm.DB, executionStore ExecutionStore, store CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, cardState CardStateWriter, wsHub WSHub, logger *zap.Logger) *Service {
+	return NewCardWorker(database, executionStore, store, ks, cp, smsProducer, logProducer, eventProducer, cardState, wsHub, logger)
 }

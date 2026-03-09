@@ -27,22 +27,24 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 
 	scylla := bootstrap.MustScylla(logger)
 	defer scylla.Close()
+	kafkaBrokers := bootstrap.KafkaBrokers()
+
 	store := scyllastore.NewMessageLogStore(scylla)
-	logWriter := NewService(store, bootstrap.KafkaBrokers(), logger.Named("log-writer"))
+	logWriter := NewService(store, kafkaBrokers, logger.Named("log-writer"))
 	defer logWriter.Close()
 
-	done := make(chan struct{})
+	logDone := make(chan struct{})
 	go func() {
 		logWriter.Start(ctx)
-		close(done)
+		close(logDone)
 	}()
 
 	select {
 	case <-ctx.Done():
-		<-done
+		<-logDone
 		logger.Info("read-model projector shutdown complete")
 		return nil
-	case <-done:
+	case <-logDone:
 		return nil
 	}
 }

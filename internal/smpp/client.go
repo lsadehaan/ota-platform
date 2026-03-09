@@ -10,6 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 )
 
@@ -61,6 +63,11 @@ type Client struct {
 	pendingMu      sync.Mutex
 	done           chan struct{}
 	deliverQ       chan deliverMessage
+
+	deliverQueueDepth     metric.Int64ObservableGauge
+	deliverBackpressure   metric.Int64Counter
+	deliverQueueDrops     metric.Int64Counter
+	deliverQueueDepthReg  metric.Registration
 }
 
 type deliverMessage struct {
@@ -84,15 +91,32 @@ func NewClientWithWorkers(config Config, handler DeliverHandler, deliverWorkers 
 	if deliverWorkers <= 0 {
 		deliverWorkers = 8
 	}
-	return &Client{
+	c := &Client{
 		config:         config,
 		handler:        handler,
 		deliverWorkers: deliverWorkers,
 		logger:         logger,
 		pending:        make(map[uint32]chan *PDU),
 		done:           make(chan struct{}),
-		deliverQ:       make(chan deliverMessage, 1024),
+		deliverQ:       make(chan deliverMessage, 8192),
 	}
+
+	meter := otel.Meter("smpp-client")
+	c.deliverBackpressure, _ = meter.Int64Counter("ota.smpp.deliver_backpressure",
+		metric.WithDescription("Times deliver queue enqueue was delayed by backpressure"))
+	c.deliverQueueDrops, _ = meter.Int64Counter("ota.smpp.deliver_queue_drops",
+		metric.WithDescription("Deliver messages dropped after backpressure timeout"))
+	c.deliverQueueDepth, _ = meter.Int64ObservableGauge("ota.smpp.deliver_queue_depth",
+		metric.WithDescription("Current deliver queue depth"))
+	if c.deliverQueueDepth != nil {
+		c.deliverQueueDepthReg, _ = meter.RegisterCallback(
+			func(_ context.Context, o metric.Observer) error {
+				o.ObserveInt64(c.deliverQueueDepth, int64(len(c.deliverQ)))
+				return nil
+			}, c.deliverQueueDepth)
+	}
+
+	return c
 }
 
 // nextSeq returns the next sequence number (1-based, wrapping).
@@ -119,7 +143,7 @@ func (c *Client) Connect(ctx context.Context) error {
 	}
 	c.conn = conn
 	c.done = make(chan struct{})
-	c.deliverQ = make(chan deliverMessage, 1024)
+	c.deliverQ = make(chan deliverMessage, 8192)
 
 	// Start the reader goroutine before sending bind so we can receive the response.
 	c.startDeliverLoop()
@@ -468,13 +492,37 @@ func (c *Client) enqueueDeliver(msg deliverMessage) {
 	case <-c.done:
 		return
 	case c.deliverQ <- msg:
+		return
 	default:
-		c.logger.Warn("deliver queue full, blocking until capacity frees")
-		select {
-		case <-c.done:
-			return
-		case c.deliverQ <- msg:
+	}
+
+	// Queue is full — apply bounded backpressure. Allow up to 5s for space,
+	// which is far shorter than SMPP enquire_link timeout but enough for
+	// transient bursts. This avoids silently losing DLR/MO messages.
+	if c.deliverBackpressure != nil {
+		c.deliverBackpressure.Add(context.Background(), 1)
+	}
+	c.logger.Warn("deliver queue full, applying backpressure",
+		zap.Int("queue_len", len(c.deliverQ)),
+		zap.Int("queue_cap", cap(c.deliverQ)),
+	)
+
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-c.done:
+		return
+	case c.deliverQ <- msg:
+		return
+	case <-timer.C:
+		// Last resort: drop after 5s of backpressure. This should only happen
+		// if downstream processing is completely stuck. Log as error, not warn.
+		if c.deliverQueueDrops != nil {
+			c.deliverQueueDrops.Add(context.Background(), 1)
 		}
+		c.logger.Error("deliver queue timeout after 5s backpressure, dropping deliver_sm",
+			zap.Int("queue_len", len(c.deliverQ)),
+		)
 	}
 }
 

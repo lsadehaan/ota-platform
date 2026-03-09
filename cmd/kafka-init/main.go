@@ -19,6 +19,7 @@ type topicSpec struct {
 	Topic             string
 	NumPartitions     int
 	ReplicationFactor int
+	ConfigEntries     []kafka.ConfigEntry
 }
 
 func main() {
@@ -39,13 +40,36 @@ func main() {
 
 	partitions := config.GetEnvInt("KAFKA_TOPIC_PARTITIONS", 12)
 	rf := config.GetEnvInt("KAFKA_TOPIC_REPLICATION_FACTOR", 1)
+	// Retention policies:
+	// - High-volume transient topics (card-activate, card-dlr, card-mo, send-sms):
+	//   24h retention, 500MB per partition. These are consumed promptly and
+	//   don't need long retention.
+	// - State/log topics (message-log, card-state-log): 72h retention.
+	//   Useful for replay/debugging but not needed indefinitely.
+	// - card-events: 72h retention. Planner-produced, consumed by executor.
+	retentionMs24h := config.GetEnv("KAFKA_RETENTION_MS_TRANSIENT", "86400000")   // 24h
+	retentionMs72h := config.GetEnv("KAFKA_RETENTION_MS_STATE", "259200000")      // 72h
+	retentionBytes := config.GetEnv("KAFKA_RETENTION_BYTES", "524288000")         // 500MB per partition
+	segmentBytes := config.GetEnv("KAFKA_SEGMENT_BYTES", "134217728")             // 128MB segments
+
+	transientRetention := []kafka.ConfigEntry{
+		{ConfigName: "retention.ms", ConfigValue: retentionMs24h},
+		{ConfigName: "retention.bytes", ConfigValue: retentionBytes},
+		{ConfigName: "segment.bytes", ConfigValue: segmentBytes},
+	}
+	stateRetention := []kafka.ConfigEntry{
+		{ConfigName: "retention.ms", ConfigValue: retentionMs72h},
+		{ConfigName: "retention.bytes", ConfigValue: retentionBytes},
+		{ConfigName: "segment.bytes", ConfigValue: segmentBytes},
+	}
+
 	topics := []topicSpec{
-		{Topic: contractevents.TopicCardEvents, NumPartitions: partitions, ReplicationFactor: rf},
-		{Topic: contractevents.TopicCardActivate, NumPartitions: partitions, ReplicationFactor: rf},
-		{Topic: contractevents.TopicCardDLR, NumPartitions: partitions, ReplicationFactor: rf},
-		{Topic: contractevents.TopicCardMO, NumPartitions: partitions, ReplicationFactor: rf},
-		{Topic: contractevents.TopicSendSMS, NumPartitions: partitions, ReplicationFactor: rf},
-		{Topic: contractevents.TopicMessageLog, NumPartitions: partitions, ReplicationFactor: rf},
+		{Topic: contractevents.TopicCardEvents, NumPartitions: partitions, ReplicationFactor: rf, ConfigEntries: stateRetention},
+		{Topic: contractevents.TopicCardActivate, NumPartitions: partitions, ReplicationFactor: rf, ConfigEntries: transientRetention},
+		{Topic: contractevents.TopicCardDLR, NumPartitions: partitions, ReplicationFactor: rf, ConfigEntries: transientRetention},
+		{Topic: contractevents.TopicCardMO, NumPartitions: partitions, ReplicationFactor: rf, ConfigEntries: transientRetention},
+		{Topic: contractevents.TopicSendSMS, NumPartitions: partitions, ReplicationFactor: rf, ConfigEntries: transientRetention},
+		{Topic: contractevents.TopicMessageLog, NumPartitions: partitions, ReplicationFactor: rf, ConfigEntries: stateRetention},
 	}
 	cfgs := make([]kafka.TopicConfig, 0, len(topics))
 	for _, topic := range topics {
@@ -53,6 +77,7 @@ func main() {
 			Topic:             topic.Topic,
 			NumPartitions:     topic.NumPartitions,
 			ReplicationFactor: topic.ReplicationFactor,
+			ConfigEntries:     topic.ConfigEntries,
 		})
 	}
 	if err := conn.CreateTopics(cfgs...); err != nil && !strings.Contains(err.Error(), "already exists") {

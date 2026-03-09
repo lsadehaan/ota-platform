@@ -115,6 +115,14 @@ func (s *ExecutionStore) UpdateCampaignCard(ctx context.Context, campaignID, car
 	}
 
 	campaignBucket := s.client.CampaignBucket(campaignID, cardID)
+
+	// Skip counter + status row updates when this write is stale (an older
+	// timestamp than what's already stored).  This prevents a late-arriving
+	// activate from reverting a card that was already completed by DLR/MO.
+	if !oldUpdatedAt.IsZero() && updatedAt.Before(oldUpdatedAt) {
+		return nil
+	}
+
 	if counterColumn(status) != counterColumn(oldStatus) {
 		if err := s.client.Session().Query(
 			fmt.Sprintf(`UPDATE campaign_progress_by_bucket SET %s = %s + ?, %s = %s + ? WHERE campaign_id = ? AND campaign_bucket = ?`,

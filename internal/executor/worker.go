@@ -16,6 +16,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"ota-platform/internal/config"
 	"ota-platform/internal/db"
 	kafkapkg "ota-platform/internal/kafka"
 	"ota-platform/internal/keystore"
@@ -36,6 +37,7 @@ type CardWorker struct {
 	smsProducer    Producer                // publishes to send-sms topic
 	logProducer    Producer                // publishes to message-log topic
 	eventProducer  Producer                // publishes to card-events topic (for self-triggering next steps)
+	cardState      CardStateWriter         // writes card state directly to ScyllaDB
 	wsHub          WSHub
 	logger         *zap.Logger
 	telemetry      *executorTelemetry
@@ -52,7 +54,7 @@ type campaignExecutionContext struct {
 }
 
 // NewCardWorker creates a new CardWorker.
-func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, wsHub WSHub, logger *zap.Logger) *CardWorker {
+func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, cardState CardStateWriter, wsHub WSHub, logger *zap.Logger) *CardWorker {
 	return &CardWorker{
 		db:             database,
 		execution:      executionStore,
@@ -62,10 +64,11 @@ func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb Coordin
 		smsProducer:    smsProducer,
 		logProducer:    logProducer,
 		eventProducer:  eventProducer,
+		cardState:      cardState,
 		wsHub:          wsHub,
 		logger:         logger,
 		telemetry:      newExecutorTelemetry(logger),
-		cardKeyCache:   newTTLCache[*keystore.CardKeyMaterial](15*time.Minute, 10000),
+		cardKeyCache:   newTTLCache[*keystore.CardKeyMaterial](15*time.Minute, config.GetEnvInt("CARD_KEY_CACHE_SIZE", 50000)),
 		profileCache:   newTTLCache[*db.Profile](30*time.Minute, 1024),
 		campaignCache:  newTTLCache[*campaignExecutionContext](10*time.Minute, 2048),
 	}
@@ -274,6 +277,24 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 		Parts:      smsParts,
 	}
 
+	// Capture timestamp BEFORE publishing so any DLR/MO completion that uses
+	// time.Now() will have a later timestamp, ensuring correct ScyllaDB LWW
+	// ordering even if UpdateCampaignCard runs after the DLR/MO handler.
+	activateTS := time.Now()
+
+	// Set Redis state BEFORE publishing to send-sms so the DLR/MO consumers
+	// can find the card state when the gateway responds.
+	if err := w.redis.SetCardState(ctx, event.CardID, &redispkg.CardState{
+		CampaignID:  event.CampaignID,
+		CurrentStep: event.Step,
+		Status:      "awaiting_dlr",
+		RetryCount:  event.RetryCount,
+		LastMsgID:   msgID.String(),
+		LastEventID: event.EventID,
+	}); err != nil {
+		w.logger.Warn("failed to set card state in redis", zap.Error(err))
+	}
+
 	if err := w.smsProducer.Publish(ctx, event.CardID, smsMsg); err != nil {
 		failCreate := kafkapkg.MessageLogAction{
 			Action: "create",
@@ -301,32 +322,22 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 		w.logger.Warn("failed to publish message log create", zap.Error(err))
 	}
 
-	// 14. Update card state in Redis.
-	if err := w.redis.SetCardState(ctx, event.CardID, &redispkg.CardState{
-		CampaignID:  event.CampaignID,
-		CurrentStep: event.Step,
-		Status:      "awaiting_dlr",
-		RetryCount:  event.RetryCount,
-		LastMsgID:   msgID.String(),
-		LastEventID: event.EventID,
-	}); err != nil {
-		w.logger.Warn("failed to set card state in redis", zap.Error(err))
-	}
-
-	// Update DB campaign card record.
-	if w.execution != nil {
-		if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
-			"status":       "in_progress",
-			"current_step": event.Step,
-			"last_msg_id":  msgID,
-			"retry_count":  event.RetryCount,
-			"updated_at":   time.Now(),
+	// Write card state directly to ScyllaDB. Use activateTS (captured
+	// before publish) so any DLR/MO completion with a later time.Now() wins.
+	if w.cardState != nil {
+		if err := w.cardState.WriteCardState(ctx, kafkapkg.CardStateChange{
+			CampaignID:  event.CampaignID,
+			CardID:      event.CardID,
+			Status:      "in_progress",
+			CurrentStep: event.Step,
+			RetryCount:  event.RetryCount,
+			LastMsgID:   msgID.String(),
+			Timestamp:   activateTS,
 		}); err != nil {
-			w.logger.Warn("failed to persist in-progress campaign card state", zap.Error(err))
+			return fmt.Errorf("write card state: %w", err)
 		}
 	}
 
-	// 16. Broadcast WebSocket event.
 	if w.wsHub != nil {
 		w.wsHub.BroadcastToCampaign(event.CampaignID, &WSEvent{
 			Type:       "card_status",
@@ -359,10 +370,24 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 	if err != nil {
 		return fmt.Errorf("get card state: %w", err)
 	}
-	if state == nil || (state.Status != "awaiting_dlr" && state.Status != "in_progress") {
+	if state == nil {
+		// Card state may not exist yet if the activate worker is still
+		// setting it in Redis.  Return an error so the consumer retries
+		// with backoff, giving the activate path time to finish.
+		return fmt.Errorf("DLR for card %s: no card state in Redis (activate may still be in progress)", event.CardID)
+	}
+	// Accept awaiting_dlr, in_progress, and awaiting_mo.  With separate
+	// card-dlr / card-mo topics the MO consumer may have already advanced
+	// the card to awaiting_mo or beyond; we still want to update the
+	// message log with DLR metadata.
+	switch state.Status {
+	case "awaiting_dlr", "in_progress", "awaiting_mo":
+		// OK — proceed.
+	default:
 		w.logger.Warn("stale DLR event: card state not awaiting_dlr",
 			zap.String("card_id", event.CardID),
 			zap.String("campaign_id", event.CampaignID),
+			zap.String("status", state.Status),
 		)
 		return nil
 	}
@@ -393,6 +418,12 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 				"dlr_status": event.DLRStatus,
 			},
 		})
+	}
+
+	// If the MO consumer already advanced the card past awaiting_dlr, skip
+	// the state transition — just the log/ws updates above are needed.
+	if state.Status != "awaiting_dlr" && state.Status != "in_progress" {
+		return nil
 	}
 
 	// 4. Handle based on DLR status.
@@ -435,13 +466,15 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 			w.logger.Warn("failed to set card state to failed after partial submit", zap.Error(err))
 		}
 
-		if w.execution != nil {
-			if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
-				"status":     "failed",
-				"last_error": errDesc,
-				"updated_at": time.Now(),
+		if w.cardState != nil {
+			if err := w.cardState.WriteCardState(ctx, kafkapkg.CardStateChange{
+				CampaignID: event.CampaignID,
+				CardID:     event.CardID,
+				Status:     "failed",
+				LastError:  errDesc,
+				Timestamp:  time.Now(),
 			}); err != nil {
-				w.logger.Warn("failed to persist partial submit failure", zap.Error(err))
+				return fmt.Errorf("write card state: %w", err)
 			}
 		}
 
@@ -510,14 +543,16 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 			w.logger.Warn("failed to set card state to failed", zap.Error(err))
 		}
 
-		if w.execution != nil {
-			if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
-				"status":      "failed",
-				"retry_count": state.RetryCount + 1,
-				"last_error":  errDesc,
-				"updated_at":  time.Now(),
+		if w.cardState != nil {
+			if err := w.cardState.WriteCardState(ctx, kafkapkg.CardStateChange{
+				CampaignID: event.CampaignID,
+				CardID:     event.CardID,
+				Status:     "failed",
+				RetryCount: state.RetryCount + 1,
+				LastError:  errDesc,
+				Timestamp:  time.Now(),
 			}); err != nil {
-				w.logger.Warn("failed to persist failed campaign card state", zap.Error(err))
+				return fmt.Errorf("write card state: %w", err)
 			}
 		}
 
@@ -586,10 +621,21 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 	if err != nil {
 		return fmt.Errorf("get card state: %w", err)
 	}
-	if state == nil || state.Status != "awaiting_mo" {
-		w.logger.Warn("stale MO event: card state not awaiting_mo",
+	if state == nil {
+		// Card state may not exist yet if the activate worker is still
+		// setting it in Redis.  Return an error so the consumer retries
+		// with backoff, giving the activate path time to finish.
+		return fmt.Errorf("MO for card %s: no card state in Redis (activate may still be in progress)", event.CardID)
+	}
+	// Accept MO when card is awaiting_dlr — the MO arriving proves SMS was
+	// delivered (SIM can only respond after receiving the OTA SMS).  With
+	// separate card-dlr / card-mo topics the MO consumer can outpace the DLR
+	// consumer, so we must not discard these events.
+	if state.Status != "awaiting_mo" && state.Status != "awaiting_dlr" {
+		w.logger.Warn("stale MO event: card state not awaiting_mo/awaiting_dlr",
 			zap.String("card_id", event.CardID),
 			zap.String("campaign_id", event.CampaignID),
+			zap.String("status", state.Status),
 		)
 		return nil
 	}
@@ -711,13 +757,15 @@ func (w *CardWorker) handleMO(ctx context.Context, event *kafkapkg.CardEvent) er
 		w.logger.Warn("failed to set card state to failed", zap.Error(err))
 	}
 
-	if w.execution != nil {
-		if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{
-			"status":     "failed",
-			"last_error": errDesc,
-			"updated_at": time.Now(),
+	if w.cardState != nil {
+		if err := w.cardState.WriteCardState(ctx, kafkapkg.CardStateChange{
+			CampaignID: event.CampaignID,
+			CardID:     event.CardID,
+			Status:     "failed",
+			LastError:  errDesc,
+			Timestamp:  time.Now(),
 		}); err != nil {
-			w.logger.Warn("failed to persist PoR failure campaign card state", zap.Error(err))
+			return fmt.Errorf("write card state: %w", err)
 		}
 	}
 
@@ -759,14 +807,19 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 
 	if nextStep == -1 {
 		// No more commands — card completed.
+		completedAt := time.Now()
 		w.redis.SetCardState(ctx, event.CardID, &redispkg.CardState{
 			CampaignID: event.CampaignID,
 			Status:     "completed",
 		})
-		// Update DB.
-		if w.execution != nil {
-			if err := w.execution.UpdateCampaignCard(ctx, event.CampaignID, event.CardID, map[string]interface{}{"status": "completed", "updated_at": time.Now()}); err != nil {
-				w.logger.Warn("failed to persist completed campaign card state", zap.Error(err))
+		if w.cardState != nil {
+			if err := w.cardState.WriteCardState(ctx, kafkapkg.CardStateChange{
+				CampaignID: event.CampaignID,
+				CardID:     event.CardID,
+				Status:     "completed",
+				Timestamp:  completedAt,
+			}); err != nil {
+				return fmt.Errorf("write card state: %w", err)
 			}
 		}
 

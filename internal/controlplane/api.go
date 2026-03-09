@@ -20,11 +20,13 @@ import (
 	"gorm.io/gorm"
 
 	"ota-platform/internal/db"
+	redispkg "ota-platform/internal/redis"
 )
 
 // API owns the control-plane HTTP surface end-to-end.
 type API struct {
 	db       *gorm.DB
+	rdb      *redispkg.Client
 	campaign *CampaignService
 	query    QueryStore
 	wsHub    *WSHub
@@ -35,9 +37,10 @@ type API struct {
 	kpiCachedUntil time.Time
 }
 
-func newAPI(database *gorm.DB, campaignSvc *CampaignService, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *API {
+func newAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *API {
 	api := &API{
 		db:       database,
+		rdb:      rdb,
 		campaign: campaignSvc,
 		query:    queryStore,
 		wsHub:    wsHub,
