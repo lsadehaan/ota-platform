@@ -172,7 +172,7 @@ func (p *Pool) Submit(req *SubmitRequest) (*SubmitResponse, error) {
 		if time.Now().After(deadline) {
 			break
 		}
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(5 * time.Millisecond)
 	}
 
 	return nil, fmt.Errorf("no bound connections with available window capacity")

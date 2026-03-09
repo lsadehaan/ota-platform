@@ -49,7 +49,7 @@ type CardEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-// CardStateChange is published to the card-state-log topic for async projection.
+// CardStateChange is used by executor for direct ScyllaDB card state writes.
 type CardStateChange struct {
 	CampaignID  string    `json:"campaign_id"`
 	CardID      string    `json:"card_id"`

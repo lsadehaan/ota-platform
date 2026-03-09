@@ -29,6 +29,8 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	scyllaClient := bootstrap.MustScylla(logger)
 	defer scyllaClient.Close()
 	queryStore := scyllastore.NewQueryStore(scyllaClient)
-	service := NewService(database, queryStore, logger.Named("reconciler"))
+	cardStateStore := scyllastore.NewCardStateStore(scyllaClient)
+
+	service := NewService(database, queryStore, cardStateStore, logger.Named("reconciler"))
 	return service.Run(ctx)
 }

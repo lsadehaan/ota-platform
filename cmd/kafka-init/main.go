@@ -44,7 +44,7 @@ func main() {
 	// - High-volume transient topics (card-activate, card-dlr, card-mo, send-sms):
 	//   24h retention, 500MB per partition. These are consumed promptly and
 	//   don't need long retention.
-	// - State/log topics (message-log, card-state-log): 72h retention.
+	// - State/log topics (message-log): 72h retention.
 	//   Useful for replay/debugging but not needed indefinitely.
 	// - card-events: 72h retention. Planner-produced, consumed by executor.
 	retentionMs24h := config.GetEnv("KAFKA_RETENTION_MS_TRANSIENT", "86400000")   // 24h

@@ -370,7 +370,7 @@ func (a *API) GetCardCounters(c *gin.Context) {
 // and pre-warms the Redis card key cache to avoid cold-start DB queries
 // when campaigns activate imported cards.
 func (a *API) ImportCards(c *gin.Context) {
-	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<30) // 1GB
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 100<<20) // 100MB
 	file, _, err := c.Request.FormFile("file")
 	if err != nil {
 		errorResponse(c, http.StatusBadRequest, "file is required")

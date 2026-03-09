@@ -198,6 +198,39 @@ func (s *QueryStore) CampaignStats(ctx context.Context, campaignID uuid.UUID) (C
 	return normalizeCampaignStats(stats), nil
 }
 
+// CampaignStatsWithStaleCards computes campaign stats and identifies non-terminal
+// cards whose updated_at is before staleThreshold, all from a single scan.
+func (s *QueryStore) CampaignStatsWithStaleCards(ctx context.Context, campaignID uuid.UUID, staleThreshold time.Time) (CampaignStats, []CampaignCardView, error) {
+	rows, err := s.latestCampaignCardViews(ctx, campaignID)
+	if err != nil {
+		return CampaignStats{}, nil, err
+	}
+	var stats CampaignStats
+	var staleCards []CampaignCardView
+	for _, row := range rows {
+		col := counterColumn(row.Status)
+		switch col {
+		case "pending":
+			stats.Pending++
+		case "in_progress":
+			stats.InProgress++
+		case "completed":
+			stats.Completed++
+		case "failed":
+			stats.Failed++
+		case "skipped":
+			stats.Skipped++
+		default:
+			stats.Pending++
+		}
+		if col == "in_progress" && row.UpdatedAt.Before(staleThreshold) {
+			staleCards = append(staleCards, row)
+		}
+	}
+	stats.Total = int64(len(rows))
+	return normalizeCampaignStats(stats), staleCards, nil
+}
+
 func (s *QueryStore) CampaignStatsBatch(ctx context.Context, campaignIDs []uuid.UUID) (map[uuid.UUID]CampaignStats, error) {
 	out := make(map[uuid.UUID]CampaignStats, len(campaignIDs))
 	if len(campaignIDs) == 0 {

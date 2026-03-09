@@ -4,27 +4,38 @@ import (
 	"context"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
+	"ota-platform/internal/config"
 	"ota-platform/internal/db"
+	kafkapkg "ota-platform/internal/kafka"
 	scyllastore "ota-platform/internal/scylla"
 )
 
-type Service struct {
-	db              *gorm.DB
-	query           *scyllastore.QueryStore
-	logger          *zap.Logger
-	reclaimInterval time.Duration
-	cleanupInterval time.Duration
-	retention       time.Duration
-	reclaimedTotal  metric.Int64Counter
-	cleanedTotal    metric.Int64Counter
+// CardStateWriter writes card state changes directly to ScyllaDB.
+type CardStateWriter interface {
+	WriteCardState(ctx context.Context, ev kafkapkg.CardStateChange) error
 }
 
-func NewService(database *gorm.DB, query *scyllastore.QueryStore, logger *zap.Logger) *Service {
+type Service struct {
+	db                  *gorm.DB
+	query               *scyllastore.QueryStore
+	cardStateWriter     CardStateWriter
+	logger              *zap.Logger
+	reclaimInterval     time.Duration
+	cleanupInterval     time.Duration
+	retention           time.Duration
+	staleCardTimeout    time.Duration
+	reclaimedTotal      metric.Int64Counter
+	cleanedTotal        metric.Int64Counter
+	staleCardsRecovered metric.Int64Counter
+}
+
+func NewService(database *gorm.DB, query *scyllastore.QueryStore, cardStateWriter CardStateWriter, logger *zap.Logger) *Service {
 	meter := otel.Meter("reconciler")
 	reclaimedTotal, err := meter.Int64Counter("ota.reconciler.shards_reclaimed", metric.WithDescription("Campaign shards reclaimed by the reconciler"))
 	if err != nil {
@@ -34,15 +45,25 @@ func NewService(database *gorm.DB, query *scyllastore.QueryStore, logger *zap.Lo
 	if err != nil {
 		logger.Warn("create reconciler shards_cleaned metric", zap.Error(err))
 	}
+	staleCardsRecovered, err := meter.Int64Counter("ota.reconciler.stale_cards_recovered", metric.WithDescription("Stale non-terminal cards recovered to failed"))
+	if err != nil {
+		logger.Warn("create reconciler stale_cards_recovered metric", zap.Error(err))
+	}
+
+	staleTimeout := time.Duration(config.GetEnvInt("RECONCILER_STALE_CARD_TIMEOUT_MINUTES", 30)) * time.Minute
+
 	return &Service{
-		db:              database,
-		query:           query,
-		logger:          logger,
-		reclaimInterval: 1 * time.Minute,
-		cleanupInterval: 10 * time.Minute,
-		retention:       24 * time.Hour,
-		reclaimedTotal:  reclaimedTotal,
-		cleanedTotal:    cleanedTotal,
+		db:                  database,
+		query:               query,
+		cardStateWriter:     cardStateWriter,
+		logger:              logger,
+		reclaimInterval:     1 * time.Minute,
+		cleanupInterval:     10 * time.Minute,
+		retention:           24 * time.Hour,
+		staleCardTimeout:    staleTimeout,
+		reclaimedTotal:      reclaimedTotal,
+		cleanedTotal:        cleanedTotal,
+		staleCardsRecovered: staleCardsRecovered,
 	}
 }
 
@@ -117,8 +138,10 @@ func (s *Service) completeTerminalCampaigns(ctx context.Context) {
 		return
 	}
 
+	staleThreshold := time.Now().Add(-s.staleCardTimeout)
+
 	for _, campaign := range campaigns {
-		stats, err := s.query.CampaignStats(ctx, campaign.ID)
+		stats, staleCards, err := s.query.CampaignStatsWithStaleCards(ctx, campaign.ID, staleThreshold)
 		if err != nil {
 			s.logger.Warn("failed to load campaign stats for reconciliation",
 				zap.String("campaign_id", campaign.ID.String()),
@@ -126,6 +149,15 @@ func (s *Service) completeTerminalCampaigns(ctx context.Context) {
 			)
 			continue
 		}
+
+		// Recover stale cards first (moves them to terminal/failed).
+		for _, card := range staleCards {
+			if s.recoverStaleCard(ctx, campaign.ID, card) {
+				stats.InProgress--
+				stats.Failed++
+			}
+		}
+
 		if stats.Total == 0 {
 			continue
 		}
@@ -172,4 +204,37 @@ func (s *Service) completeTerminalCampaigns(ctx context.Context) {
 			)
 		}
 	}
+}
+
+func (s *Service) recoverStaleCard(ctx context.Context, campaignID uuid.UUID, card scyllastore.CampaignCardView) bool {
+	if s.cardStateWriter == nil {
+		return false
+	}
+
+	if err := s.cardStateWriter.WriteCardState(ctx, kafkapkg.CardStateChange{
+		CampaignID: campaignID.String(),
+		CardID:     card.CardID,
+		Status:     "failed",
+		LastError:  "stale: no progress for " + s.staleCardTimeout.String(),
+		Timestamp:  time.Now(),
+	}); err != nil {
+		s.logger.Error("failed to write stale card recovery state",
+			zap.String("card_id", card.CardID),
+			zap.String("campaign_id", campaignID.String()),
+			zap.Error(err),
+		)
+		return false
+	}
+
+	if s.staleCardsRecovered != nil {
+		s.staleCardsRecovered.Add(ctx, 1)
+	}
+
+	s.logger.Warn("recovered stale card",
+		zap.String("card_id", card.CardID),
+		zap.String("campaign_id", campaignID.String()),
+		zap.String("old_status", card.Status),
+		zap.Time("last_updated", card.UpdatedAt),
+	)
+	return true
 }

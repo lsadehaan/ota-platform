@@ -310,6 +310,91 @@
         "tooltip": {"mode": "multi"},
         "legend": {"displayMode": "list", "placement": "bottom"}
       }
+    },
+    {
+      "type": "row",
+      "title": "Drop & Recovery Counters",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 50},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "SMPP Deliver Queue Drops",
+      "description": "Rate of SMPP deliver_sm messages dropped due to backpressure. Non-zero = DLR/MO loss → stale cards.",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 51},
+      "targets": [
+        {
+          "expr": "rate(ota_smpp_deliver_queue_drops_total[1m])",
+          "legendFormat": "drops/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Stale Card Recoveries",
+      "description": "Rate of stale non-terminal cards recovered to failed by the reconciler. Non-zero = cards were stuck.",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 51},
+      "targets": [
+        {
+          "expr": "rate(ota_reconciler_stale_cards_recovered_total[1m])",
+          "legendFormat": "recoveries/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Projector Dropped Batches",
+      "description": "Rate of projector batches dropped after max retries. Non-zero = message log data loss.",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 51},
+      "targets": [
+        {
+          "expr": "rate(ota_projector_create_batch_drops_total[1m])",
+          "legendFormat": "create drops/s"
+        },
+        {
+          "expr": "rate(ota_projector_update_batch_drops_total[1m])",
+          "legendFormat": "update drops/s"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "min": 0,
+          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi"},
+        "legend": {"displayMode": "list", "placement": "bottom"}
+      }
     }
   ],
   "refresh": "10s",

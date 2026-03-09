@@ -13,6 +13,8 @@ import (
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
@@ -44,7 +46,9 @@ type CardWorker struct {
 	cardKeyCache   *ttlCache[*keystore.CardKeyMaterial]
 	profileCache   *ttlCache[*db.Profile]
 	campaignCache  *ttlCache[*campaignExecutionContext]
-	retryWg sync.WaitGroup
+	retryWg        sync.WaitGroup
+	retrySem       chan struct{} // bounds concurrent retry goroutines
+	retryOverflows metric.Int64Counter
 }
 
 type campaignExecutionContext struct {
@@ -55,6 +59,14 @@ type campaignExecutionContext struct {
 
 // NewCardWorker creates a new CardWorker.
 func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, cardState CardStateWriter, wsHub WSHub, logger *zap.Logger) *CardWorker {
+	meter := otel.Meter("card-executor")
+	retryOverflows, err := meter.Int64Counter("ota.executor.retry_overflows",
+		metric.WithDescription("Retry goroutine limit overflows (card failed immediately)"),
+	)
+	if err != nil {
+		logger.Warn("create executor retry_overflows metric", zap.Error(err))
+	}
+
 	return &CardWorker{
 		db:             database,
 		execution:      executionStore,
@@ -71,6 +83,8 @@ func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb Coordin
 		cardKeyCache:   newTTLCache[*keystore.CardKeyMaterial](15*time.Minute, config.GetEnvInt("CARD_KEY_CACHE_SIZE", 50000)),
 		profileCache:   newTTLCache[*db.Profile](30*time.Minute, 1024),
 		campaignCache:  newTTLCache[*campaignExecutionContext](10*time.Minute, 2048),
+		retrySem:       make(chan struct{}, 10000),
+		retryOverflows: retryOverflows,
 	}
 }
 
@@ -584,9 +598,39 @@ func (w *CardWorker) handleDLR(ctx context.Context, event *kafkapkg.CardEvent) e
 }
 
 func (w *CardWorker) scheduleActivateRetry(ctx context.Context, event kafkapkg.CardEvent, delay time.Duration, reason string) {
+	select {
+	case w.retrySem <- struct{}{}:
+	default:
+		// Retry scheduler full — fail the card deterministically rather than
+		// silently losing the retry.
+		w.logger.Error("retry goroutine limit reached, failing card",
+			zap.String("card_id", event.CardID),
+			zap.String("campaign_id", event.CampaignID),
+			zap.String("reason", reason),
+		)
+		if w.retryOverflows != nil {
+			w.retryOverflows.Add(ctx, 1)
+		}
+		if w.cardState != nil {
+			_ = w.cardState.WriteCardState(ctx, kafkapkg.CardStateChange{
+				CampaignID: event.CampaignID,
+				CardID:     event.CardID,
+				Status:     "failed",
+				LastError:  "retry_scheduler_overflow: " + reason,
+				Timestamp:  time.Now(),
+			})
+		}
+		_ = w.redis.SetCardState(ctx, event.CardID, &redispkg.CardState{
+			CampaignID: event.CampaignID,
+			Status:     "failed",
+		})
+		w.telemetry.recordCardProcessed(ctx, "failed")
+		return
+	}
 	w.retryWg.Add(1)
 	go func() {
 		defer w.retryWg.Done()
+		defer func() { <-w.retrySem }()
 		timer := time.NewTimer(delay)
 		defer timer.Stop()
 
@@ -855,11 +899,6 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 	}
 	return w.eventProducer.Publish(ctx, event.CardID, nextEvent)
 }
-
-// completionCheckInterval controls how often we query campaign stats to detect
-// NOTE: Campaign completion detection has been moved to the reconciler service,
-// which polls running campaigns every 1 minute. This removes per-card ScyllaDB
-// reads from the hot path, significantly improving MO/DLR throughput.
 
 // loadProfileCached loads a card profile using cache-aside: try Redis first, fall back to DB.
 func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*db.Profile, error) {
