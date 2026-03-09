@@ -18,7 +18,6 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	"ota-platform/internal/config"
 	"ota-platform/internal/db"
 	kafkapkg "ota-platform/internal/kafka"
 	"ota-platform/internal/keystore"
@@ -43,9 +42,6 @@ type CardWorker struct {
 	wsHub          WSHub
 	logger         *zap.Logger
 	telemetry      *executorTelemetry
-	cardKeyCache   *ttlCache[*keystore.CardKeyMaterial]
-	profileCache   *ttlCache[*db.Profile]
-	campaignCache  *ttlCache[*campaignExecutionContext]
 	retryWg        sync.WaitGroup
 	retrySem       chan struct{} // bounds concurrent retry goroutines
 	retryOverflows metric.Int64Counter
@@ -80,9 +76,6 @@ func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb Coordin
 		wsHub:          wsHub,
 		logger:         logger,
 		telemetry:      newExecutorTelemetry(logger),
-		cardKeyCache:   newTTLCache[*keystore.CardKeyMaterial](15*time.Minute, config.GetEnvInt("CARD_KEY_CACHE_SIZE", 50000)),
-		profileCache:   newTTLCache[*db.Profile](30*time.Minute, 1024),
-		campaignCache:  newTTLCache[*campaignExecutionContext](10*time.Minute, 2048),
 		retrySem:       make(chan struct{}, 10000),
 		retryOverflows: retryOverflows,
 	}
@@ -902,16 +895,12 @@ func (w *CardWorker) advanceOrComplete(ctx context.Context, event *kafkapkg.Card
 
 // loadProfileCached loads a card profile using cache-aside: try Redis first, fall back to DB.
 func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*db.Profile, error) {
-	if cached, ok := w.profileCache.Get(profileID); ok {
-		return cached, nil
-	}
 	var profile db.Profile
 	err := w.redis.GetCachedProfile(ctx, profileID, &profile)
 	if err != nil && !errors.Is(err, goredis.Nil) {
 		w.logger.Warn("redis profile cache error", zap.Error(err))
 	}
 	if err == nil {
-		w.profileCache.Set(profileID, &profile)
 		return &profile, nil
 	}
 	// Cache miss or error — load from DB.
@@ -919,7 +908,6 @@ func (w *CardWorker) loadProfileCached(ctx context.Context, profileID string) (*
 		return nil, fmt.Errorf("load profile %s: %w", profileID, err)
 	}
 	_ = w.redis.CacheProfile(ctx, profileID, &profile)
-	w.profileCache.Set(profileID, &profile)
 	return &profile, nil
 }
 
@@ -998,23 +986,10 @@ func (w *CardWorker) loadCampaignCommands(ctx context.Context, campaignID string
 }
 
 func (w *CardWorker) loadCardKeys(ctx context.Context, cardID string) (*keystore.CardKeyMaterial, error) {
-	if cached, ok := w.cardKeyCache.Get(cardID); ok {
-		return cached, nil
-	}
-
-	keys, err := w.keyStore.GetKeys(ctx, cardID)
-	if err != nil {
-		return nil, err
-	}
-	w.cardKeyCache.Set(cardID, keys)
-	return keys, nil
+	return w.keyStore.GetKeys(ctx, cardID)
 }
 
 func (w *CardWorker) loadCampaignContext(ctx context.Context, campaignID string) (*campaignExecutionContext, error) {
-	if cached, ok := w.campaignCache.Get(campaignID); ok {
-		return cached, nil
-	}
-
 	commands, err := w.loadCampaignCommands(ctx, campaignID)
 	if err != nil {
 		return nil, err
@@ -1029,13 +1004,11 @@ func (w *CardWorker) loadCampaignContext(ctx context.Context, campaignID string)
 		commandByStep[commands[i].Sequence] = &commands[i]
 	}
 
-	campaignCtx := &campaignExecutionContext{
+	return &campaignExecutionContext{
 		commands:      commands,
 		commandByStep: commandByStep,
 		params:        params,
-	}
-	w.campaignCache.Set(campaignID, campaignCtx)
-	return campaignCtx, nil
+	}, nil
 }
 
 // buildSecProfileFromCache converts a CampaignCommandCache to a gsm0348.SecurityProfile.

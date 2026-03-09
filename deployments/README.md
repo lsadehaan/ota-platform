@@ -129,7 +129,6 @@ The load overlay (`docker-compose.load.yml`) tunes settings for high-throughput 
 | `CARD_*_READERS` | 1 | 1 | Multiple kafka-go Readers per topic (same consumer group) |
 | `DB_MAX_OPEN_CONNS` | 25 | 32 | Must be >= CARD_WORKER_CONCURRENCY |
 | `DB_MAX_IDLE_CONNS` | 10 | 16 | Half of max open |
-| `CARD_KEY_CACHE_SIZE` | 50000 | 100000 | In-memory TTL cache for card encryption keys |
 
 ### read-model-projector
 
