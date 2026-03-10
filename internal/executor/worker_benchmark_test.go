@@ -38,9 +38,6 @@ func (s *benchmarkCoordinationStore) GetCampaignStatus(context.Context, string) 
 func (s *benchmarkCoordinationStore) SetCampaignStatus(context.Context, string, string) error {
 	return nil
 }
-func (s *benchmarkCoordinationStore) IncrCounter(context.Context, string, string) (int64, error) {
-	return 1, nil
-}
 func (s *benchmarkCoordinationStore) AcquireThrottle(context.Context, string, int) (bool, error) {
 	return true, nil
 }
@@ -76,6 +73,12 @@ type benchmarkProducer struct{}
 
 func (benchmarkProducer) Publish(context.Context, string, interface{}) error { return nil }
 func (benchmarkProducer) Close() error                                       { return nil }
+
+type benchmarkCounterStore struct{}
+
+func (benchmarkCounterStore) IncrCounter(context.Context, string, string) (int64, error) {
+	return 1, nil
+}
 
 type benchmarkCardStateWriter struct{}
 
@@ -134,7 +137,7 @@ func BenchmarkHandleActivate(b *testing.B) {
 		},
 	}
 
-	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, ks, nil, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, benchmarkCardStateWriter{}, nil, zap.NewNop())
+	worker := NewCardWorker(nil, benchmarkExecutionStore{}, store, ks, nil, benchmarkProducer{}, benchmarkProducer{}, benchmarkProducer{}, benchmarkCardStateWriter{}, benchmarkCounterStore{}, nil, zap.NewNop())
 	payload, err := json.Marshal(kafkapkg.CardEvent{
 		Type:       "card.activate",
 		EventID:    "evt-1",

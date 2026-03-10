@@ -37,8 +37,10 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	go wsHub.Run(ctx)
 
 	queryStore := scyllastore.NewQueryStore(scylla)
+	cardKeyStore := scyllastore.NewCardKeyStore(scylla)
+	counterStore := scyllastore.NewCounterStore(scylla)
 	campaignSvc := NewCampaignService(database, rdb, queryStore, wsHub, logger.Named("campaign"))
-	api := NewAPI(database, rdb, campaignSvc, queryStore, wsHub, logger.Named("api"))
+	api := NewAPI(database, rdb, campaignSvc, queryStore, cardKeyStore, counterStore, wsHub, logger.Named("api"))
 	router := api.SetupRouter()
 
 	port := config.GetEnv("OTA_API_PORT", "8080")

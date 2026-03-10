@@ -46,7 +46,6 @@ type pipelineCoordinationStore struct {
 	profile        db.Profile
 
 	cardStateByID   map[string]*redispkg.CardState
-	counterByKey    map[string]int64
 	correlationByID map[string]*redispkg.SMPPMapping
 }
 
@@ -80,7 +79,6 @@ func newPipelineCoordinationStore() *pipelineCoordinationStore {
 			DCS:          0,
 		},
 		cardStateByID:   make(map[string]*redispkg.CardState),
-		counterByKey:    make(map[string]int64),
 		correlationByID: make(map[string]*redispkg.SMPPMapping),
 	}
 }
@@ -93,11 +91,6 @@ func (s *pipelineCoordinationStore) GetCampaignStatus(context.Context, string) (
 }
 func (s *pipelineCoordinationStore) SetCampaignStatus(context.Context, string, string) error {
 	return nil
-}
-func (s *pipelineCoordinationStore) IncrCounter(_ context.Context, cardID, appID string) (int64, error) {
-	key := cardID + ":" + appID
-	s.counterByKey[key]++
-	return s.counterByKey[key], nil
 }
 func (s *pipelineCoordinationStore) AcquireThrottle(context.Context, string, int) (bool, error) {
 	return true, nil
@@ -170,6 +163,16 @@ func (p *pipelineProducer) Publish(_ context.Context, _ string, message interfac
 }
 
 func (p *pipelineProducer) Close() error { return nil }
+
+type pipelineCounterStore struct {
+	counterByKey map[string]int64
+}
+
+func (s *pipelineCounterStore) IncrCounter(_ context.Context, cardID, appID string) (int64, error) {
+	key := cardID + ":" + appID
+	s.counterByKey[key]++
+	return s.counterByKey[key], nil
+}
 
 type pipelineCardStateWriter struct{}
 
@@ -301,7 +304,7 @@ func BenchmarkActivationPipeline(b *testing.B) {
 		smsProducer := &pipelineProducer{}
 		logProducer := &pipelineProducer{}
 		eventProducer := &pipelineProducer{}
-		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, pipelineCardStateWriter{}, nil, zap.NewNop())
+		worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, pipelineCardStateWriter{}, &pipelineCounterStore{counterByKey: make(map[string]int64)}, nil, zap.NewNop())
 		plannerSvc := NewService(database, &executorBridgePublisher{worker: worker, ctx: context.Background()}, zap.NewNop())
 		projectorStore := &pipelineProjectorStore{}
 		gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, &pipelineProducer{}, coordination, zap.NewNop())
@@ -337,7 +340,7 @@ func BenchmarkActivationResponsePipeline(b *testing.B) {
 	smsProducer := &pipelineProducer{}
 	logProducer := &pipelineProducer{}
 	eventProducer := &pipelineProducer{}
-	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, pipelineCardStateWriter{}, nil, zap.NewNop())
+	worker := executor.NewService(nil, pipelineExecutionStore{}, coordination, newPipelineKeyStore(), nil, smsProducer, logProducer, eventProducer, pipelineCardStateWriter{}, &pipelineCounterStore{counterByKey: make(map[string]int64)}, nil, zap.NewNop())
 	bridge := &executorBridgePublisher{worker: worker, ctx: context.Background()}
 	gateway := transport.NewServiceWithDeps(pipelineSMPPClient{}, bridge, coordination, zap.NewNop())
 

@@ -15,7 +15,6 @@ type CoordinationStore interface {
 	CheckAndSetDedupe(ctx context.Context, eventID string) (bool, error)
 	GetCampaignStatus(ctx context.Context, campaignID string) (string, error)
 	SetCampaignStatus(ctx context.Context, campaignID, status string) error
-	IncrCounter(ctx context.Context, cardID, appID string) (int64, error)
 	AcquireThrottle(ctx context.Context, campaignID string, ratePerSec int) (bool, error)
 	SetCardState(ctx context.Context, cardID string, state *redispkg.CardState) error
 	GetCardState(ctx context.Context, cardID string) (*redispkg.CardState, error)
@@ -25,6 +24,11 @@ type CoordinationStore interface {
 	CacheCampaignParams(ctx context.Context, campaignID string, params *redispkg.CampaignParams) error
 	GetCampaignCommands(ctx context.Context, campaignID string) ([]redispkg.CampaignCommandCache, error)
 	CacheCampaignCommands(ctx context.Context, campaignID string, cmds []redispkg.CampaignCommandCache) error
+}
+
+// CounterStore abstracts atomic counter operations backed by ScyllaDB.
+type CounterStore interface {
+	IncrCounter(ctx context.Context, cardID, applicationID string) (int64, error)
 }
 
 // WSEvent is the websocket payload type shared with the control plane.
@@ -55,6 +59,6 @@ type CardStateWriter interface {
 type Service = CardWorker
 
 // NewService constructs the executor service.
-func NewService(database *gorm.DB, executionStore ExecutionStore, store CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, cardState CardStateWriter, wsHub WSHub, logger *zap.Logger) *Service {
-	return NewCardWorker(database, executionStore, store, ks, cp, smsProducer, logProducer, eventProducer, cardState, wsHub, logger)
+func NewService(database *gorm.DB, executionStore ExecutionStore, store CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, cardState CardStateWriter, counterStore CounterStore, wsHub WSHub, logger *zap.Logger) *Service {
+	return NewCardWorker(database, executionStore, store, ks, cp, smsProducer, logProducer, eventProducer, cardState, counterStore, wsHub, logger)
 }

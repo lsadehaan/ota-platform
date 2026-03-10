@@ -25,26 +25,30 @@ import (
 
 // API owns the control-plane HTTP surface end-to-end.
 type API struct {
-	db       *gorm.DB
-	rdb      *redispkg.Client
-	campaign *CampaignService
-	query    QueryStore
-	wsHub    *WSHub
-	logger   *zap.Logger
+	db          *gorm.DB
+	rdb         *redispkg.Client
+	campaign    *CampaignService
+	query       QueryStore
+	cardKeys    CardKeyWriter
+	counterRead CounterReader
+	wsHub       *WSHub
+	logger      *zap.Logger
 
 	kpiMu          sync.Mutex
 	kpiCached      dashboardKPI
 	kpiCachedUntil time.Time
 }
 
-func newAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *API {
+func newAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, cardKeys CardKeyWriter, counterRead CounterReader, wsHub *WSHub, logger *zap.Logger) *API {
 	api := &API{
-		db:       database,
-		rdb:      rdb,
-		campaign: campaignSvc,
-		query:    queryStore,
-		wsHub:    wsHub,
-		logger:   logger,
+		db:          database,
+		rdb:         rdb,
+		campaign:    campaignSvc,
+		query:       queryStore,
+		cardKeys:    cardKeys,
+		counterRead: counterRead,
+		wsHub:       wsHub,
+		logger:      logger,
 	}
 	api.registerMetrics()
 	return api

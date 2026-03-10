@@ -39,6 +39,7 @@ type CardWorker struct {
 	logProducer    Producer                // publishes to message-log topic
 	eventProducer  Producer                // publishes to card-events topic (for self-triggering next steps)
 	cardState      CardStateWriter         // writes card state directly to ScyllaDB
+	counterStore   CounterStore            // atomic counter operations (ScyllaDB)
 	wsHub          WSHub
 	logger         *zap.Logger
 	telemetry      *executorTelemetry
@@ -54,7 +55,7 @@ type campaignExecutionContext struct {
 }
 
 // NewCardWorker creates a new CardWorker.
-func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, cardState CardStateWriter, wsHub WSHub, logger *zap.Logger) *CardWorker {
+func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb CoordinationStore, ks keystore.KeyStore, cp keystore.CryptoProvider, smsProducer, logProducer, eventProducer Producer, cardState CardStateWriter, counterStore CounterStore, wsHub WSHub, logger *zap.Logger) *CardWorker {
 	meter := otel.Meter("card-executor")
 	retryOverflows, err := meter.Int64Counter("ota.executor.retry_overflows",
 		metric.WithDescription("Retry goroutine limit overflows (card failed immediately)"),
@@ -73,6 +74,7 @@ func NewCardWorker(database *gorm.DB, executionStore ExecutionStore, rdb Coordin
 		logProducer:    logProducer,
 		eventProducer:  eventProducer,
 		cardState:      cardState,
+		counterStore:   counterStore,
 		wsHub:          wsHub,
 		logger:         logger,
 		telemetry:      newExecutorTelemetry(logger),
@@ -163,8 +165,8 @@ func (w *CardWorker) handleActivate(ctx context.Context, event *kafkapkg.CardEve
 	// 5. Build security profile from the cached command.
 	secProfile := buildSecProfileFromCache(cmd)
 
-	// 6. Get/increment counter from Redis.
-	counterVal, err := w.redis.IncrCounter(ctx, event.CardID, cmd.ApplicationID)
+	// 6. Get/increment counter from ScyllaDB.
+	counterVal, err := w.counterStore.IncrCounter(ctx, event.CardID, cmd.ApplicationID)
 	if err != nil {
 		return fmt.Errorf("increment counter: %w", err)
 	}

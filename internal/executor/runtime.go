@@ -57,18 +57,20 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 	defer scylla.Close()
 	cardStateStore := scyllastore.NewCardStateStore(scylla)
 
-	// Build keystore.
-	keyCfg := keystore.Config{
-		Backend:      config.GetEnv("KEYSTORE_BACKEND", "software"),
-		CacheEnabled: true,
-	}
-	redisCache := keystore.NewRedisKeyCache(rdb)
-	ks, cp, err := keystore.Build(keyCfg, database, redisCache, logger.Named("keystore"))
-	if err != nil {
-		return fmt.Errorf("build keystore: %w", err)
+	// Build keystore from ScyllaDB.
+	cardKeyStore := scyllastore.NewCardKeyStore(scylla)
+	counterStore := scyllastore.NewCounterStore(scylla)
+
+	backend := config.GetEnv("KEYSTORE_BACKEND", "software")
+	var ks keystore.KeyStore
+	var cp keystore.CryptoProvider
+	if backend == "software" {
+		ks = keystore.NewScyllaKeyStore(&scyllaKeyAdapter{store: cardKeyStore})
+	} else {
+		ks, cp, _ = keystore.Build(keystore.Config{Backend: backend}, database, logger.Named("keystore"))
 	}
 
-	cardWorker := NewService(database, nil, rdb, ks, cp, smsProducer, logProducer, activateProducer, cardStateStore, nil, logger.Named("card-worker"))
+	cardWorker := NewService(database, nil, rdb, ks, cp, smsProducer, logProducer, activateProducer, cardStateStore, counterStore, nil, logger.Named("card-worker"))
 	consumerMgr := NewConsumerManager(kafkaBrokers, cardWorker, logger.Named("consumer"))
 	defer consumerMgr.Close()
 
@@ -88,4 +90,24 @@ func Run(ctx context.Context, logger *zap.Logger) error {
 		cardWorker.DrainRetries()
 		return nil
 	}
+}
+
+// scyllaKeyAdapter adapts scylla.CardKeyStore to the keystore.ScyllaKeyReader interface.
+type scyllaKeyAdapter struct {
+	store *scyllastore.CardKeyStore
+}
+
+func (a *scyllaKeyAdapter) GetCardKeys(ctx context.Context, cardID string) (*keystore.ScyllaCardKeyRecord, error) {
+	rec, err := a.store.GetCardKeys(ctx, cardID)
+	if err != nil {
+		return nil, err
+	}
+	return &keystore.ScyllaCardKeyRecord{
+		CardID:    rec.CardID,
+		EncKey:    rec.EncKey,
+		AuthKey:   rec.AuthKey,
+		KEK:       rec.KEK,
+		ProfileID: rec.ProfileID,
+		MSISDN:    rec.MSISDN,
+	}, nil
 }

@@ -10,12 +10,11 @@ import (
 
 // Config holds keystore configuration.
 type Config struct {
-	Backend      string `json:"backend" yaml:"backend"`
-	CacheEnabled bool   `json:"cache_enabled" yaml:"cache_enabled"`
+	Backend string `json:"backend" yaml:"backend"`
 }
 
 // Factory creates a KeyStore and optional CryptoProvider from configuration.
-type Factory func(cfg Config, db *gorm.DB, cache KeyCache, logger *zap.Logger) (KeyStore, CryptoProvider, error)
+type Factory func(cfg Config, db *gorm.DB, logger *zap.Logger) (KeyStore, CryptoProvider, error)
 
 var (
 	mu        sync.RWMutex
@@ -31,20 +30,14 @@ func Register(name string, factory Factory) {
 }
 
 // Build constructs a KeyStore (and optional CryptoProvider) based on config.
-// If CacheEnabled is true and the backend does not provide its own CryptoProvider,
-// the KeyStore is wrapped with a CachedKeyStore decorator.
-func Build(cfg Config, db *gorm.DB, cache KeyCache, logger *zap.Logger) (KeyStore, CryptoProvider, error) {
+func Build(cfg Config, db *gorm.DB, logger *zap.Logger) (KeyStore, CryptoProvider, error) {
 	backend := cfg.Backend
 	if backend == "" {
 		backend = "software"
 	}
 
 	if backend == "software" {
-		ks := NewSoftwareKeyStore(db)
-		if cfg.CacheEnabled && cache != nil {
-			return NewCachedKeyStore(ks, cache), nil, nil
-		}
-		return ks, nil, nil
+		return NewSoftwareKeyStore(db), nil, nil
 	}
 
 	mu.RLock()
@@ -54,16 +47,5 @@ func Build(cfg Config, db *gorm.DB, cache KeyCache, logger *zap.Logger) (KeyStor
 		return nil, nil, fmt.Errorf("keystore: unknown backend %q", backend)
 	}
 
-	ks, cp, err := factory(cfg, db, cache, logger)
-	if err != nil {
-		return nil, nil, fmt.Errorf("keystore: build %q: %w", backend, err)
-	}
-
-	// Wrap with cache if backend doesn't provide CryptoProvider
-	// (i.e., keys are extracted and can be cached).
-	if cp == nil && cfg.CacheEnabled && cache != nil {
-		ks = NewCachedKeyStore(ks, cache)
-	}
-
-	return ks, cp, nil
+	return factory(cfg, db, logger)
 }

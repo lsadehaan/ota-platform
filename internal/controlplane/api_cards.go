@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"ota-platform/internal/db"
-	redispkg "ota-platform/internal/redis"
+	scyllastore "ota-platform/internal/scylla"
 	"ota-platform/pkg/hexutil"
 )
 
@@ -164,6 +164,12 @@ func (a *API) CreateCard(c *gin.Context) {
 		return
 	}
 
+	if a.cardKeys != nil {
+		if err := a.cardKeys.WriteCardKeys(c.Request.Context(), card.ID.String(), card.EncKey, card.AuthKey, card.KEK, card.ProfileID.String(), card.MSISDN); err != nil {
+			a.logger.Warn("failed to write card keys to ScyllaDB", zap.Error(err))
+		}
+	}
+
 	c.JSON(http.StatusCreated, gin.H{"data": card})
 }
 
@@ -185,9 +191,11 @@ func (a *API) GetCard(c *gin.Context) {
 		return
 	}
 
-	// Load counters
-	var counters []db.CardCounter
-	a.db.Preload("Application").Where("card_id = ?", id).Find(&counters)
+	// Load counters from ScyllaDB.
+	var counters []scyllastore.CardCounterRecord
+	if a.counterRead != nil {
+		counters, _ = a.counterRead.GetCountersByCard(c.Request.Context(), id)
+	}
 
 	// Load recent messages (last 10)
 	recentMessages, err := a.query.ListCardMessages(c.Request.Context(), card.ID, 10)
@@ -286,6 +294,13 @@ func (a *API) UpdateCard(c *gin.Context) {
 		return
 	}
 
+	if a.cardKeys != nil {
+		a.db.First(&card, "id = ?", id)
+		if err := a.cardKeys.WriteCardKeys(c.Request.Context(), card.ID.String(), card.EncKey, card.AuthKey, card.KEK, card.ProfileID.String(), card.MSISDN); err != nil {
+			a.logger.Warn("failed to update card keys in ScyllaDB", zap.Error(err))
+		}
+	}
+
 	a.db.Preload("Profile").First(&card, "id = ?", id)
 	c.JSON(http.StatusOK, gin.H{"data": card})
 }
@@ -306,6 +321,10 @@ func (a *API) DeleteCard(c *gin.Context) {
 	if result.RowsAffected == 0 {
 		errorResponse(c, http.StatusNotFound, "card not found")
 		return
+	}
+
+	if a.cardKeys != nil {
+		_ = a.cardKeys.DeleteCardKeys(c.Request.Context(), id)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "card deleted"})
@@ -330,29 +349,30 @@ func (a *API) GetCardCounters(c *gin.Context) {
 		return
 	}
 
-	var counters []db.CardCounter
-	if err := a.db.
-		Preload("Application").
-		Where("card_id = ?", id).
-		Find(&counters).Error; err != nil {
+	if a.counterRead == nil {
+		c.JSON(http.StatusOK, gin.H{"data": []interface{}{}})
+		return
+	}
+	scyllaCounters, err := a.counterRead.GetCountersByCard(c.Request.Context(), id)
+	if err != nil {
 		a.logger.Error("failed to get card counters", zap.Error(err))
 		errorResponse(c, http.StatusInternalServerError, "failed to get card counters")
 		return
 	}
 
-	// Build response with application names
 	type counterResponse struct {
-		CardID          uuid.UUID `json:"card_id"`
-		ApplicationID   uuid.UUID `json:"application_id"`
-		ApplicationName string    `json:"application_name"`
-		CounterValue    int64     `json:"counter_value"`
+		CardID          string `json:"card_id"`
+		ApplicationID   string `json:"application_id"`
+		ApplicationName string `json:"application_name"`
+		CounterValue    int64  `json:"counter_value"`
 	}
 
-	result := make([]counterResponse, 0, len(counters))
-	for _, ctr := range counters {
+	result := make([]counterResponse, 0, len(scyllaCounters))
+	for _, ctr := range scyllaCounters {
 		appName := ""
-		if ctr.Application.Name != "" {
-			appName = ctr.Application.Name
+		var app db.Application
+		if err := a.db.Select("name").First(&app, "id = ?", ctr.ApplicationID).Error; err == nil {
+			appName = app.Name
 		}
 		result = append(result, counterResponse{
 			CardID:          ctr.CardID,
@@ -440,29 +460,27 @@ func (a *API) ImportCards(c *gin.Context) {
 		created += int(result.Inserted)
 		skipped += int(result.Skipped)
 
-		// Pre-warm Redis card key cache for inserted cards.
-		if a.rdb != nil && len(result.InsertedIDs) > 0 {
+		// Write card keys to ScyllaDB for inserted cards.
+		if a.cardKeys != nil && len(result.InsertedIDs) > 0 {
 			insertedSet := make(map[uuid.UUID]struct{}, len(result.InsertedIDs))
 			for _, id := range result.InsertedIDs {
 				insertedSet[id] = struct{}{}
 			}
-
-			keysToCache := make(map[string]*redispkg.CardKeys, len(result.InsertedIDs))
+			var records []scyllastore.CardKeyRecord
 			for i := range batch {
 				if _, ok := insertedSet[batch[i].ID]; ok {
-					keysToCache[batch[i].ID.String()] = &redispkg.CardKeys{
+					records = append(records, scyllastore.CardKeyRecord{
+						CardID:    batch[i].ID.String(),
 						EncKey:    batch[i].EncKey,
 						AuthKey:   batch[i].AuthKey,
 						KEK:       batch[i].KEK,
 						ProfileID: batch[i].ProfileID.String(),
 						MSISDN:    batch[i].MSISDN,
-					}
+					})
 				}
 			}
-
-			if err := a.rdb.BulkCacheCardKeys(c.Request.Context(), keysToCache); err != nil {
-				a.logger.Warn("failed to pre-warm card key cache", zap.Error(err))
-				// Non-fatal: keys will be loaded on demand.
+			if err := a.cardKeys.WriteCardKeysBatch(c.Request.Context(), records); err != nil {
+				a.logger.Warn("failed to write card keys to ScyllaDB", zap.Error(err))
 			}
 		}
 

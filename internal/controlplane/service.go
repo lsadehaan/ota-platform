@@ -41,6 +41,18 @@ type QueryStore interface {
 	CampaignErrorSummary(ctx context.Context, campaignID uuid.UUID, since time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error)
 }
 
-func NewAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *API {
-	return newAPI(database, rdb, campaignSvc, queryStore, wsHub, logger)
+// CardKeyWriter writes card key material to ScyllaDB.
+type CardKeyWriter interface {
+	WriteCardKeys(ctx context.Context, cardID string, encKey, authKey, kek []byte, profileID, msisdn string) error
+	WriteCardKeysBatch(ctx context.Context, records []scyllastore.CardKeyRecord) error
+	DeleteCardKeys(ctx context.Context, cardID string) error
+}
+
+// CounterReader reads card counters from ScyllaDB.
+type CounterReader interface {
+	GetCountersByCard(ctx context.Context, cardID string) ([]scyllastore.CardCounterRecord, error)
+}
+
+func NewAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, cardKeys CardKeyWriter, counterRead CounterReader, wsHub *WSHub, logger *zap.Logger) *API {
+	return newAPI(database, rdb, campaignSvc, queryStore, cardKeys, counterRead, wsHub, logger)
 }
