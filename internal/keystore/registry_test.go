@@ -10,7 +10,7 @@ func TestRegistry_DefaultSoftware(t *testing.T) {
 	db := setupTestDB(t)
 
 	cfg := Config{Backend: "software"}
-	ks, cp, err := Build(cfg, db, nil, zap.NewNop())
+	ks, cp, err := Build(cfg, db, zap.NewNop())
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -26,7 +26,7 @@ func TestRegistry_EmptyBackendDefaultsToSoftware(t *testing.T) {
 	db := setupTestDB(t)
 
 	cfg := Config{Backend: ""}
-	ks, _, err := Build(cfg, db, nil, zap.NewNop())
+	ks, _, err := Build(cfg, db, zap.NewNop())
 	if err != nil {
 		t.Fatalf("Build failed: %v", err)
 	}
@@ -37,23 +37,8 @@ func TestRegistry_EmptyBackendDefaultsToSoftware(t *testing.T) {
 
 func TestRegistry_UnknownBackend(t *testing.T) {
 	cfg := Config{Backend: "nonexistent"}
-	_, _, err := Build(cfg, nil, nil, zap.NewNop())
+	_, _, err := Build(cfg, nil, zap.NewNop())
 	if err == nil {
 		t.Fatal("expected error for unknown backend")
-	}
-}
-
-func TestRegistry_SoftwareWithCache(t *testing.T) {
-	db := setupTestDB(t)
-	cache := newMockCache()
-
-	cfg := Config{Backend: "software", CacheEnabled: true}
-	ks, _, err := Build(cfg, db, cache, zap.NewNop())
-	if err != nil {
-		t.Fatalf("Build failed: %v", err)
-	}
-	// Should be a CachedKeyStore wrapping SoftwareKeyStore
-	if _, ok := ks.(*CachedKeyStore); !ok {
-		t.Errorf("expected *CachedKeyStore, got %T", ks)
 	}
 }

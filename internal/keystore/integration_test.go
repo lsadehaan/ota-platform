@@ -9,9 +9,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// TestIntegration_SoftwareWithCache tests the full stack:
-// CachedKeyStore -> SoftwareKeyStore -> SQLite DB
-func TestIntegration_SoftwareWithCache(t *testing.T) {
+// TestIntegration_SoftwareKeyStore tests the SoftwareKeyStore reading from SQLite.
+func TestIntegration_SoftwareKeyStore(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("failed to open sqlite: %v", err)
@@ -34,38 +33,60 @@ func TestIntegration_SoftwareWithCache(t *testing.T) {
 		Status:    "active",
 	})
 
-	// Build via registry.
-	cache := newMockCache()
-	cfg := Config{Backend: "software", CacheEnabled: true}
-	ks, cp, err := Build(cfg, db, cache, nil)
+	ks := NewSoftwareKeyStore(db)
+
+	keys, err := ks.GetKeys(context.Background(), cardID.String())
 	if err != nil {
-		t.Fatalf("Build failed: %v", err)
+		t.Fatalf("GetKeys failed: %v", err)
 	}
-	if cp != nil {
-		t.Error("expected nil CryptoProvider for software backend")
+	if string(keys.EncKey) != string(encKey) {
+		t.Error("EncKey mismatch")
+	}
+	if string(keys.AuthKey) != string(authKey) {
+		t.Error("AuthKey mismatch")
+	}
+	if keys.ProfileID != profileID.String() {
+		t.Errorf("ProfileID = %q, want %q", keys.ProfileID, profileID.String())
+	}
+	if keys.MSISDN != "+31612345678" {
+		t.Errorf("MSISDN = %q, want %q", keys.MSISDN, "+31612345678")
+	}
+}
+
+// TestIntegration_ScyllaKeyStore tests the ScyllaKeyStore adapter with a mock reader.
+func TestIntegration_ScyllaKeyStore(t *testing.T) {
+	encKey := []byte{0x01, 0x02}
+	authKey := []byte{0x03, 0x04}
+	kek := []byte{0x05, 0x06}
+
+	reader := &mockScyllaReader{
+		record: &ScyllaCardKeyRecord{
+			CardID:    "card-123",
+			EncKey:    encKey,
+			AuthKey:   authKey,
+			KEK:       kek,
+			ProfileID: "profile-456",
+			MSISDN:    "+1234567890",
+		},
 	}
 
-	// First call — cache miss, reads from DB.
-	keys1, err := ks.GetKeys(context.Background(), cardID.String())
+	ks := NewScyllaKeyStore(reader)
+	keys, err := ks.GetKeys(context.Background(), "card-123")
 	if err != nil {
-		t.Fatalf("first GetKeys failed: %v", err)
+		t.Fatalf("GetKeys failed: %v", err)
 	}
-	if string(keys1.EncKey) != string(encKey) {
-		t.Error("EncKey mismatch on first call")
+	if string(keys.EncKey) != string(encKey) {
+		t.Error("EncKey mismatch")
 	}
+	if keys.ProfileID != "profile-456" {
+		t.Errorf("ProfileID = %q, want %q", keys.ProfileID, "profile-456")
+	}
+}
 
-	// Verify it's in cache now.
-	cached, _ := cache.GetCachedKeys(context.Background(), cardID.String())
-	if cached == nil {
-		t.Fatal("expected keys to be cached after first call")
-	}
+type mockScyllaReader struct {
+	record *ScyllaCardKeyRecord
+}
 
-	// Second call — should hit cache.
-	keys2, err := ks.GetKeys(context.Background(), cardID.String())
-	if err != nil {
-		t.Fatalf("second GetKeys failed: %v", err)
-	}
-	if string(keys2.EncKey) != string(encKey) {
-		t.Error("EncKey mismatch on second call")
-	}
+func (m *mockScyllaReader) GetCardKeys(_ context.Context, _ string) (*ScyllaCardKeyRecord, error) {
+	return m.record, nil
 }
