@@ -367,17 +367,26 @@ func (a *API) GetCardCounters(c *gin.Context) {
 		CounterValue    int64  `json:"counter_value"`
 	}
 
+	// Batch-load application names to avoid N+1 queries.
+	appIDs := make([]string, 0, len(scyllaCounters))
+	for _, ctr := range scyllaCounters {
+		appIDs = append(appIDs, ctr.ApplicationID)
+	}
+	appNames := make(map[string]string, len(appIDs))
+	if len(appIDs) > 0 {
+		var apps []db.Application
+		a.db.Select("id, name").Where("id IN ?", appIDs).Find(&apps)
+		for _, app := range apps {
+			appNames[app.ID.String()] = app.Name
+		}
+	}
+
 	result := make([]counterResponse, 0, len(scyllaCounters))
 	for _, ctr := range scyllaCounters {
-		appName := ""
-		var app db.Application
-		if err := a.db.Select("name").First(&app, "id = ?", ctr.ApplicationID).Error; err == nil {
-			appName = app.Name
-		}
 		result = append(result, counterResponse{
 			CardID:          ctr.CardID,
 			ApplicationID:   ctr.ApplicationID,
-			ApplicationName: appName,
+			ApplicationName: appNames[ctr.ApplicationID],
 			CounterValue:    ctr.CounterValue,
 		})
 	}

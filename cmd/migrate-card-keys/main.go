@@ -95,32 +95,44 @@ func main() {
 	)
 
 	// ── Phase 2: Migrate counters ───────────────────────────────────────
+	// NOTE: SeedCounter uses counter_value = counter_value + ?, which is
+	// additive. Running this migration twice will double counter values.
+	// Only run once per environment.
 	logger.Info("starting counter migration")
 	counterStart := time.Now()
 	var totalCounters int64
 
-	var counters []db.CardCounter
-	result := gormDB.WithContext(ctx).Find(&counters)
-	if result.Error != nil {
-		logger.Fatal("failed to read card counters from Postgres", zap.Error(result.Error))
-	}
-
-	for _, c := range counters {
+	for counterOffset := 0; ; counterOffset += cardBatchSize {
 		if err := ctx.Err(); err != nil {
 			logger.Warn("migration interrupted during counter seeding", zap.Error(err))
 			os.Exit(1)
 		}
 
-		if err := counterStore.SeedCounter(ctx, c.CardID.String(), c.ApplicationID.String(), c.CounterValue); err != nil {
-			logger.Fatal("failed to seed counter in ScyllaDB",
-				zap.String("card_id", c.CardID.String()),
-				zap.String("application_id", c.ApplicationID.String()),
-				zap.Error(err),
-			)
+		var counters []db.CardCounter
+		result := gormDB.WithContext(ctx).
+			Order("card_id, application_id").
+			Offset(counterOffset).
+			Limit(cardBatchSize).
+			Find(&counters)
+		if result.Error != nil {
+			logger.Fatal("failed to read card counters from Postgres", zap.Error(result.Error))
+		}
+		if len(counters) == 0 {
+			break
 		}
 
-		totalCounters++
-		if totalCounters%10000 == 0 {
+		for _, c := range counters {
+			if err := counterStore.SeedCounter(ctx, c.CardID.String(), c.ApplicationID.String(), c.CounterValue); err != nil {
+				logger.Fatal("failed to seed counter in ScyllaDB",
+					zap.String("card_id", c.CardID.String()),
+					zap.String("application_id", c.ApplicationID.String()),
+					zap.Error(err),
+				)
+			}
+			totalCounters++
+		}
+
+		if totalCounters%10000 == 0 && totalCounters > 0 {
 			logger.Info("counter migration progress",
 				zap.Int64("counters_migrated", totalCounters),
 				zap.Duration("elapsed", time.Since(counterStart)),
