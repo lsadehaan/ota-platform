@@ -373,6 +373,20 @@ func (c *Client) ensureSchema() error {
 			skipped counter,
 			PRIMARY KEY ((campaign_id), campaign_bucket)
 		)`,
+		`CREATE TABLE IF NOT EXISTS card_keys (
+			card_id uuid PRIMARY KEY,
+			enc_key blob,
+			auth_key blob,
+			kek blob,
+			profile_id uuid,
+			msisdn text
+		)`,
+		`CREATE TABLE IF NOT EXISTS card_counters (
+			card_id uuid,
+			application_id uuid,
+			counter_value counter,
+			PRIMARY KEY (card_id, application_id)
+		)`,
 	}
 
 	for _, stmt := range stmts {
