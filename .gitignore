@@ -46,3 +46,6 @@ web/out/
 
 # Temp
 tmp/
+
+# Worktrees
+.worktrees/
