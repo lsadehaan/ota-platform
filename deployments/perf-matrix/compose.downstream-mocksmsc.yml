@@ -1,0 +1,19 @@
+# Downstream in-repo mock SMSC overlay for easy DLR-producing benchmark runs.
+
+services:
+  downstream-smsc:
+    build:
+      context: ../..
+      dockerfile: cmd/mock-smsc/Dockerfile
+    ports:
+      - "2775:2775"
+    environment:
+      SMSC_PORT: "2775"
+      DLR_DELAY_MS: "25"
+      DLR_SUCCESS_RATE: "1.0"
+      ENABLE_MO: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2775 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

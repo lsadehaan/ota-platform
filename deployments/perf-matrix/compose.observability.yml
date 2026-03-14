@@ -1,0 +1,53 @@
+# Shared observability stack for benchmark runs.
+#
+# This is adapted from deployments/docker-compose.engine.yml, reduced to the
+# pieces that are useful for benchmark comparisons.
+
+services:
+  node-exporter:
+    image: prom/node-exporter:latest
+    command:
+      - "--path.rootfs=/host"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.perf.yml:/etc/prometheus/prometheus.yml:ro
+      - perf-prometheus-data:/prometheus
+    depends_on:
+      central-sut:
+        condition: service_started
+      cadvisor:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3002:3000"
+    volumes:
+      - perf-grafana-data:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_started

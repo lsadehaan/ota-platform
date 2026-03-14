@@ -211,7 +211,7 @@ export interface DashboardKPIs {
 
 export interface SMSThroughputPoint {
   timestamp: string
-  sent: number
+  sent: number   // avg TPS for the minute bucket
   delivered: number
   failed: number
 }

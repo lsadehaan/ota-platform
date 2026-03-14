@@ -2,6 +2,8 @@ package redis
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"fmt"
 	"runtime"
 	"time"
@@ -21,9 +23,9 @@ type Config struct {
 
 // Client is a wrapper around the go-redis client with logging.
 type Client struct {
-	rdb           *redis.Client
-	logger        *zap.Logger
-	encryptionKey []byte
+	rdb    *redis.Client
+	logger *zap.Logger
+	aead   cipher.AEAD
 }
 
 // NewClient creates a new Redis client, pings to verify the connection, and
@@ -55,10 +57,26 @@ func NewClient(cfg Config, logger *zap.Logger, encryptionKey []byte) (*Client, e
 
 	logger.Info("connected to redis", zap.String("addr", cfg.Addr), zap.Int("db", cfg.DB))
 
+	var aead cipher.AEAD
+	if len(encryptionKey) > 0 {
+		block, err := aes.NewCipher(encryptionKey)
+		if err != nil {
+			return nil, fmt.Errorf("create redis encryption cipher: %w", err)
+		}
+		aead, err = cipher.NewGCM(block)
+		if err != nil {
+			return nil, fmt.Errorf("create redis encryption AEAD: %w", err)
+		}
+	}
+
+	for i := range encryptionKey {
+		encryptionKey[i] = 0
+	}
+
 	return &Client{
-		rdb:           rdb,
-		logger:        logger,
-		encryptionKey: encryptionKey,
+		rdb:    rdb,
+		logger: logger,
+		aead:   aead,
 	}, nil
 }
 

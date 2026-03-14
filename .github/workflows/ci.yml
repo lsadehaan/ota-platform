@@ -39,4 +39,4 @@ jobs:
 
       - name: Verify Docker images build
         run: |
-          docker compose -f deployments/docker-compose.yml build --parallel
+          docker compose -f deployments/docker-compose.engine.yml build --parallel

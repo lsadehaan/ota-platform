@@ -1,10 +1,14 @@
 package gsm0348
 
 import (
+	"context"
+	"crypto/aes"
 	"crypto/cipher"
 	"crypto/des"
 	"fmt"
 )
+
+var zeroIV16 [16]byte
 
 // BuildCommandPacket constructs a complete GSM 03.48 command packet from the
 // given input using the security profile's parameters.
@@ -26,8 +30,7 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 		blockSize := sp.cipherBlockSize()
 		paddedData, pcntr = padData(input.UserData, blockSize)
 	} else {
-		paddedData = make([]byte, len(input.UserData))
-		copy(paddedData, input.UserData)
+		paddedData = input.UserData
 		pcntr = 0
 	}
 
@@ -51,7 +54,18 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 		copy(signature, crc)
 	case CertCC:
 		// Cryptographic Checksum (MAC)
-		mac, err := computeMAC(sp.KIDMode, input.SigningKey, header, paddedData)
+		var mac []byte
+		var err error
+		if input.CryptoProvider != nil {
+			macInput := append(header, paddedData...)
+			if len(macInput)%8 != 0 {
+				padLen := 8 - (len(macInput) % 8)
+				macInput = append(macInput, make([]byte, padLen)...)
+			}
+			mac, err = input.CryptoProvider.ComputeMAC(context.Background(), input.CardID, algoName(sp.KIDAlgo), cipherModeName(sp.KIDMode), macInput)
+		} else {
+			mac, err = computeMAC(sp.KIDMode, input.SigningKey, header, paddedData)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("gsm0348: compute MAC: %w", err)
 		}
@@ -65,7 +79,13 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 
 	// Encrypt the secured data if ciphering is enabled.
 	if sp.Ciphered {
-		encrypted, err := encryptData(sp.KIcMode, input.CipheringKey, input.Counter[:], securedData)
+		var encrypted []byte
+		var err error
+		if input.CryptoProvider != nil {
+			encrypted, err = input.CryptoProvider.Encrypt(context.Background(), input.CardID, algoName(sp.KIcAlgo), cipherModeName(sp.KIcMode), securedData)
+		} else {
+			encrypted, err = encryptData(sp.KIcMode, input.CipheringKey, input.Counter[:], securedData)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("gsm0348: encrypt data: %w", err)
 		}
@@ -90,8 +110,8 @@ func (sp *SecurityProfile) BuildCommandPacket(input *CommandPacketInput) ([]byte
 // Bits 1-2: certification mode, bit 3: ciphered, bits 4-5: counter mode.
 func (sp *SecurityProfile) encodeSPI1() byte {
 	var b byte
-	b |= byte(sp.CertMode) & 0x03        // bits 0-1
-	if sp.Ciphered {                      // bit 2
+	b |= byte(sp.CertMode) & 0x03 // bits 0-1
+	if sp.Ciphered {              // bit 2
 		b |= 0x04
 	}
 	b |= (byte(sp.CounterMode) & 0x03) << 3 // bits 3-4
@@ -103,9 +123,9 @@ func (sp *SecurityProfile) encodeSPI1() byte {
 // bits 6-7: PoR protocol.
 func (sp *SecurityProfile) encodeSPI2() byte {
 	var b byte
-	b |= byte(sp.PoRMode) & 0x03             // bits 0-1
-	b |= (byte(sp.PoRCertMode) & 0x03) << 2  // bits 2-3
-	if sp.PoRCiphered {                       // bit 4
+	b |= byte(sp.PoRMode) & 0x03            // bits 0-1
+	b |= (byte(sp.PoRCertMode) & 0x03) << 2 // bits 2-3
+	if sp.PoRCiphered {                     // bit 4
 		b |= 0x10
 	}
 	b |= (sp.PoRProtocol & 0x03) << 5 // bits 5-6
@@ -168,9 +188,7 @@ func padData(data []byte, blockSize int) ([]byte, byte) {
 	}
 	remainder := len(data) % blockSize
 	if remainder == 0 {
-		out := make([]byte, len(data))
-		copy(out, data)
-		return out, 0
+		return data, 0
 	}
 	padLen := blockSize - remainder
 	padded := make([]byte, len(data)+padLen)
@@ -187,14 +205,13 @@ func padData(data []byte, blockSize int) ([]byte, byte) {
 //
 // Returns an 8-byte MAC.
 func computeMAC(mode CipherMode, key []byte, header, data []byte) ([]byte, error) {
-	// Combine header and data for MAC computation.
-	macInput := append(header, data...)
-
-	// Pad to 8-byte boundary if needed.
-	if len(macInput)%8 != 0 {
-		padLen := 8 - (len(macInput) % 8)
-		macInput = append(macInput, make([]byte, padLen)...)
+	totalLen := len(header) + len(data)
+	if rem := totalLen % 8; rem != 0 {
+		totalLen += 8 - rem
 	}
+	macInput := make([]byte, totalLen)
+	copy(macInput, header)
+	copy(macInput[len(header):], data)
 
 	switch mode {
 	case CipherDES_CBC:
@@ -306,6 +323,17 @@ func encryptData(mode CipherMode, key []byte, counter []byte, data []byte) ([]by
 	var err error
 
 	switch mode {
+	case CipherAES_CBC:
+		switch {
+		case len(key) >= 32:
+			block, err = aes.NewCipher(key[:32])
+		case len(key) >= 24:
+			block, err = aes.NewCipher(key[:24])
+		case len(key) >= 16:
+			block, err = aes.NewCipher(key[:16])
+		default:
+			return nil, fmt.Errorf("gsm0348: AES key must be at least 16 bytes, got %d", len(key))
+		}
 	case CipherDES_CBC:
 		if len(key) < 8 {
 			return nil, fmt.Errorf("gsm0348: DES key must be at least 8 bytes")
@@ -339,8 +367,7 @@ func encryptData(mode CipherMode, key []byte, counter []byte, data []byte) ([]by
 	}
 
 	// IV is all zeros.
-	iv := make([]byte, blockSize)
-	cbc := cipher.NewCBCEncrypter(block, iv)
+	cbc := cipher.NewCBCEncrypter(block, zeroIV16[:blockSize])
 
 	encrypted := make([]byte, len(data))
 	cbc.CryptBlocks(encrypted, data)
@@ -350,10 +377,13 @@ func encryptData(mode CipherMode, key []byte, counter []byte, data []byte) ([]by
 // computeCRC computes a simple CRC (XOR-based redundancy check) over
 // the header and data, returning a slice of the requested length.
 func computeCRC(header, data []byte, length int) []byte {
-	combined := append(header, data...)
 	crc := make([]byte, length)
-	for i, b := range combined {
+	for i, b := range header {
 		crc[i%length] ^= b
+	}
+	offset := len(header)
+	for i, b := range data {
+		crc[(offset+i)%length] ^= b
 	}
 	return crc
 }
@@ -362,5 +392,31 @@ func computeCRC(header, data []byte, length int) []byte {
 func xorBytes(dst, src []byte) {
 	for i := 0; i < len(dst) && i < len(src); i++ {
 		dst[i] ^= src[i]
+	}
+}
+
+// algoName returns a string name for the algorithm byte.
+func algoName(algo byte) string {
+	switch algo {
+	case 0x02:
+		return "AES"
+	default:
+		return "DES"
+	}
+}
+
+// cipherModeName returns a string name for a CipherMode.
+func cipherModeName(mode CipherMode) string {
+	switch mode {
+	case CipherDES_CBC:
+		return "DES_CBC"
+	case Cipher3DES_CBC_2Keys:
+		return "TRIPLE_DES_CBC_2_KEYS"
+	case Cipher3DES_CBC_3Keys:
+		return "TRIPLE_DES_CBC_3_KEYS"
+	case CipherAES_CBC:
+		return "AES_CBC"
+	default:
+		return "DES_CBC"
 	}
 }

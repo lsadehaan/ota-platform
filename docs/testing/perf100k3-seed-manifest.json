@@ -1,0 +1,98 @@
+{
+  "prefix": "perf100k3",
+  "profiles": 10,
+  "cards_per_profile": 10000,
+  "generated_at": "2026-03-08T12:54:16.254287472Z",
+  "profile_manifests": [
+    {
+      "index": 1,
+      "profile_name": "perf100k3-profile-01",
+      "profile_id": "f06881c2-f9d8-4dc3-b6f0-30acd692f682",
+      "application_id": "b1cb43cc-5cd1-445a-8e6d-323cdc92f51b",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-01-00000",
+      "first_msisdn": "447700000000"
+    },
+    {
+      "index": 2,
+      "profile_name": "perf100k3-profile-02",
+      "profile_id": "b535b764-16e5-47c1-ab30-2e354ab3e52f",
+      "application_id": "87e0bc55-16a4-4366-aeeb-fefbd9698e3b",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-02-00000",
+      "first_msisdn": "447700100000"
+    },
+    {
+      "index": 3,
+      "profile_name": "perf100k3-profile-03",
+      "profile_id": "65c9a5b3-5494-4a90-adc1-656d876f30cd",
+      "application_id": "6a677ce8-c788-459e-aa55-81cccfd30320",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-03-00000",
+      "first_msisdn": "447700200000"
+    },
+    {
+      "index": 4,
+      "profile_name": "perf100k3-profile-04",
+      "profile_id": "2a6c7430-f8c1-4cdf-b3a3-6a4de7f08e54",
+      "application_id": "57edb0a9-c4d9-45b1-983c-88b7755f169c",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-04-00000",
+      "first_msisdn": "447700300000"
+    },
+    {
+      "index": 5,
+      "profile_name": "perf100k3-profile-05",
+      "profile_id": "50e989b3-317c-49c6-8b19-971c0e6bd5da",
+      "application_id": "65c3652c-010a-46bb-a998-7cb1fa4ff028",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-05-00000",
+      "first_msisdn": "447700400000"
+    },
+    {
+      "index": 6,
+      "profile_name": "perf100k3-profile-06",
+      "profile_id": "93614c2e-d2cd-4132-a071-cca7e86475c6",
+      "application_id": "0987e4ae-987a-4f0d-8a99-b8f97f89d282",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-06-00000",
+      "first_msisdn": "447700500000"
+    },
+    {
+      "index": 7,
+      "profile_name": "perf100k3-profile-07",
+      "profile_id": "4e093045-d1c6-47cb-b470-b17547e7972b",
+      "application_id": "5b0a6543-adcb-44e1-99ba-4fefe8c6637c",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-07-00000",
+      "first_msisdn": "447700600000"
+    },
+    {
+      "index": 8,
+      "profile_name": "perf100k3-profile-08",
+      "profile_id": "2ba3fd65-f029-4930-bc71-13d53a1c2b74",
+      "application_id": "a7d22e17-0463-4aa5-888e-5b6ba93b0036",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-08-00000",
+      "first_msisdn": "447700700000"
+    },
+    {
+      "index": 9,
+      "profile_name": "perf100k3-profile-09",
+      "profile_id": "cd91f3cf-2006-465c-8a63-b3e9dbb054a2",
+      "application_id": "c5ac1b89-de4d-41eb-84e2-8ac471f38453",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-09-00000",
+      "first_msisdn": "447700800000"
+    },
+    {
+      "index": 10,
+      "profile_name": "perf100k3-profile-10",
+      "profile_id": "69d5d03d-e255-45b1-9c48-5cbdc34ebe2a",
+      "application_id": "23e6179a-0d43-406d-961d-ac0d323073fa",
+      "card_count": 10000,
+      "first_iccid": "perf100k3-iccid-10-00000",
+      "first_msisdn": "447700900000"
+    }
+  ]
+}

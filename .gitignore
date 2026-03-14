@@ -1,5 +1,17 @@
 # Go
 /bin/
+/ota-engine
+/smsc-gateway
+/smpp-probe-smsc
+/card-executor
+/ota-api
+/campaign-planner
+/sms-gateway
+/read-model-projector
+/reconciler
+/mock-smsc
+/kafka-init
+/db-migrate
 *.exe
 *.exe~
 *.dll
@@ -37,3 +49,7 @@ web/out/
 
 # Temp
 tmp/
+
+# Worktrees
+.worktrees/
+__pycache__/

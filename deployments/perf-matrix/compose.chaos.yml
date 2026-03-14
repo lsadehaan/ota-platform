@@ -1,0 +1,45 @@
+# Optional fault-injection overlay.
+#
+# This currently injects only the southbound proxy path.
+# A future northbound proxy can be added the same way for
+# loadgen-esme -> central-sut faults.
+
+services:
+  toxiproxy-south:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"
+      - "2778:2778"
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  toxiproxy-south-init:
+    image: curlimages/curl:latest
+    depends_on:
+      toxiproxy-south:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        n=0; while [ $$n -lt 5 ]; do
+          curl -sf -X POST http://toxiproxy-south:8474/proxies \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"downstream-smsc","listen":"0.0.0.0:2778","upstream":"downstream-smsc:2775","enabled":true}' && \
+          echo "southbound toxiproxy created" && exit 0
+          n=$$((n+1)); echo "Attempt $$n failed, retrying in 2s..."
+          sleep 2
+        done
+        echo "Failed to create toxiproxy proxy after 5 attempts"
+        exit 1
+
+  central-sut:
+    environment:
+      GW_SMSC_HOST: toxiproxy-south
+      GW_SMSC_PORT: "2778"
+    depends_on:
+      toxiproxy-south-init:
+        condition: service_completed_successfully

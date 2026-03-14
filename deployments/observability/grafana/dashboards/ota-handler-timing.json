@@ -1,0 +1,443 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "title": "handleActivate — Per-Operation Timing",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Activate: p50 per Operation",
+      "description": "Median (p50) latency for each I/O operation in handleActivate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 1},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"activate\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Activate: p95 per Operation",
+      "description": "95th percentile latency for each I/O operation in handleActivate",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 1},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"activate\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Activate: p99 per Operation",
+      "description": "99th percentile latency for each I/O operation in handleActivate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 9},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.99, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"activate\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Activate: Mean per Operation",
+      "description": "Average latency for each I/O operation in handleActivate",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 9},
+      "targets": [
+        {
+          "expr": "sum by (op) (rate(ota_executor_op_duration_ms_sum{handler=\"activate\"}[$__rate_interval])) / sum by (op) (rate(ota_executor_op_duration_ms_count{handler=\"activate\"}[$__rate_interval]))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "row",
+      "title": "handleDLR — Per-Operation Timing",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "DLR: p50 per Operation",
+      "description": "Median latency for each I/O operation in handleDLR",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 18},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"dlr\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DLR: p95 per Operation",
+      "description": "95th percentile latency for each I/O operation in handleDLR",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 18},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"dlr\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "row",
+      "title": "handleMO — Per-Operation Timing",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "MO: p50 per Operation",
+      "description": "Median latency for each I/O operation in handleMO",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 27},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"mo\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "MO: p95 per Operation",
+      "description": "95th percentile latency for each I/O operation in handleMO",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"mo\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "row",
+      "title": "handleSendSMS (Gateway) — Per-Operation Timing",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 35},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "SendSMS: p50 per Operation",
+      "description": "Median latency for each I/O operation in handleSendSMS",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_transport_op_duration_ms_bucket{handler=\"send_sms\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "SendSMS: p95 per Operation",
+      "description": "95th percentile latency for each I/O operation in handleSendSMS",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 36},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(ota_transport_op_duration_ms_bucket{handler=\"send_sms\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "row",
+      "title": "Gateway DLR/MO Handlers — Per-Operation Timing",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 44},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway DLR: p50 per Operation",
+      "description": "Median latency for each I/O operation in gateway handleDLR",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 45},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_transport_op_duration_ms_bucket{handler=\"handle_dlr\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway MO: p50 per Operation",
+      "description": "Median latency for each I/O operation in gateway handleMO",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 45},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_transport_op_duration_ms_bucket{handler=\"handle_mo\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "row",
+      "title": "Total Handler Duration Comparison",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 53},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Total Handler Duration — p50",
+      "description": "Median total processing time per handler (executor processing_duration_ms)",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 54},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le, ota_event_type) (rate(ota_executor_processing_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "executor:{{ota_event_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Total Handler Duration — p95",
+      "description": "95th percentile total processing time per handler",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 54},
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, ota_event_type) (rate(ota_executor_processing_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "executor:{{ota_event_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "row",
+      "title": "Operation Rate (ops/sec)",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 62},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Executor Operations per Second",
+      "description": "Rate of each operation in executor handlers",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 63},
+      "targets": [
+        {
+          "expr": "sum by (handler, op) (rate(ota_executor_op_duration_ms_count[$__rate_interval]))",
+          "legendFormat": "{{handler}}/{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ops",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Gateway Operations per Second",
+      "description": "Rate of each operation in gateway handlers",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 63},
+      "targets": [
+        {
+          "expr": "sum by (handler, op) (rate(ota_transport_op_duration_ms_count[$__rate_interval]))",
+          "legendFormat": "{{handler}}/{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ops",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["ota", "performance", "handler-timing"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OTA Handler Timing",
+  "uid": "ota-handler-timing"
+}

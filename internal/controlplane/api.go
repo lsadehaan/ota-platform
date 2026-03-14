@@ -1,8 +1,10 @@
 package controlplane
 
 import (
+	"context"
 	"crypto/subtle"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strings"
 	"sync"
@@ -11,31 +13,59 @@ import (
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+
+	"ota-platform/internal/db"
+	redispkg "ota-platform/internal/redis"
 )
 
 // API owns the control-plane HTTP surface end-to-end.
 type API struct {
-	db       *gorm.DB
-	campaign *CampaignService
-	query    QueryStore
-	wsHub    *WSHub
-	logger   *zap.Logger
+	db          *gorm.DB
+	rdb         *redispkg.Client
+	campaign    *CampaignService
+	query       QueryStore
+	cardKeys    CardKeyWriter
+	counterRead CounterReader
+	wsHub       *WSHub
+	logger      *zap.Logger
+
+	importKeySyncFailures metric.Int64Counter
 
 	kpiMu          sync.Mutex
 	kpiCached      dashboardKPI
 	kpiCachedUntil time.Time
+
+	// Campaign stats cache: avoids re-scanning 128 ScyllaDB buckets on every poll.
+	statsCacheMu sync.Mutex
+	statsCache   map[string]cachedCampaignStats
+
+	channelStats ChannelStats
 }
 
-func newAPI(database *gorm.DB, campaignSvc *CampaignService, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *API {
-	return &API{
-		db:       database,
-		campaign: campaignSvc,
-		query:    queryStore,
-		wsHub:    wsHub,
-		logger:   logger,
+func newAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, cardKeys CardKeyWriter, counterRead CounterReader, wsHub *WSHub, logger *zap.Logger) *API {
+	api := &API{
+		db:          database,
+		rdb:         rdb,
+		campaign:    campaignSvc,
+		query:       queryStore,
+		cardKeys:    cardKeys,
+		counterRead: counterRead,
+		wsHub:       wsHub,
+		logger:      logger,
 	}
+	api.registerMetrics()
+	return api
+}
+
+// SetChannelStats injects a ChannelStats provider (typically the pipeline Bus)
+// so the debug endpoint can report channel depths.
+func (a *API) SetChannelStats(cs ChannelStats) {
+	a.channelStats = cs
 }
 
 func apiKeyAuth(logger *zap.Logger) gin.HandlerFunc {
@@ -61,6 +91,7 @@ func apiKeyAuth(logger *zap.Logger) gin.HandlerFunc {
 
 func (a *API) SetupRouter() *gin.Engine {
 	r := gin.Default()
+	r.Use(otelgin.Middleware("ota-api"))
 
 	r.MaxMultipartMemory = 10 << 20
 
@@ -136,8 +167,31 @@ func (a *API) SetupRouter() *gin.Engine {
 		v1.GET("/monitoring/messages/:id", a.GetMessage)
 		v1.GET("/monitoring/errors", a.GetErrorSummary)
 
+		v1.GET("/debug/card/:id", a.GetDebugCard)
+		v1.GET("/debug/campaign/:id", a.GetDebugCampaign)
+		v1.GET("/debug/message/:id", a.GetDebugMessage)
+		v1.GET("/debug/queues", a.GetDebugQueues)
+		v1.GET("/debug/stuck", a.GetDebugStuck)
+
 		v1.GET("/settings", a.GetSettings)
 		v1.PUT("/settings", a.UpdateSettings)
+	}
+
+	dbg := r.Group("/debug/pprof")
+	dbg.Use(apiKeyAuth(a.logger))
+	{
+		dbg.GET("/", gin.WrapF(pprof.Index))
+		dbg.GET("/cmdline", gin.WrapF(pprof.Cmdline))
+		dbg.GET("/profile", gin.WrapF(pprof.Profile))
+		dbg.POST("/symbol", gin.WrapF(pprof.Symbol))
+		dbg.GET("/symbol", gin.WrapF(pprof.Symbol))
+		dbg.GET("/trace", gin.WrapF(pprof.Trace))
+		dbg.GET("/allocs", gin.WrapH(pprof.Handler("allocs")))
+		dbg.GET("/block", gin.WrapH(pprof.Handler("block")))
+		dbg.GET("/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+		dbg.GET("/heap", gin.WrapH(pprof.Handler("heap")))
+		dbg.GET("/mutex", gin.WrapH(pprof.Handler("mutex")))
+		dbg.GET("/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
 	}
 
 	r.GET("/ws", func(c *gin.Context) {
@@ -219,4 +273,30 @@ func parseUUID(c *gin.Context, param string) (string, bool) {
 func escapeLike(s string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 	return replacer.Replace(s)
+}
+
+func (a *API) registerMetrics() {
+	meter := otel.Meter("ota-api")
+	a.importKeySyncFailures, _ = meter.Int64Counter("ota.controlplane.card_import_key_sync_failures_total",
+		metric.WithDescription("Card import batches where ScyllaDB key sync failed after Postgres insert"),
+	)
+	_, err := meter.Int64ObservableGauge(
+		"ota.campaigns.active",
+		metric.WithDescription("Number of active campaigns"),
+		metric.WithInt64Callback(func(ctx context.Context, observer metric.Int64Observer) error {
+			var count int64
+			if err := a.db.WithContext(ctx).
+				Model(&db.Campaign{}).
+				Where("status = ?", "running").
+				Count(&count).Error; err != nil {
+				a.logger.Warn("observe active campaigns", zap.Error(err))
+				return err
+			}
+			observer.Observe(count)
+			return nil
+		}),
+	)
+	if err != nil {
+		a.logger.Warn("register ota-api metrics", zap.Error(err))
+	}
 }

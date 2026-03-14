@@ -1,0 +1,404 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "row",
+      "title": "Overview",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Campaign TPS",
+      "description": "Rate of cards processed per second across all campaigns",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum(rate(ota_executor_cards_processed_total[$__rate_interval]))",
+          "legendFormat": "Cards/sec"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "cps",
+          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never", "gradientMode": "scheme"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Events/sec by Type",
+      "description": "Rate of events processed, broken down by event type",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum by (ota_event_type) (rate(ota_executor_events_processed_total[$__rate_interval]))",
+          "legendFormat": "{{ota_event_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ops",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Message Log Drops",
+      "description": "Total messages dropped from the message log channel (non-blocking send)",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 1},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "ota_bus_message_log_dropped",
+          "legendFormat": "Drops"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 1},
+              {"color": "red", "value": 100}
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "reduceOptions": {"calcs": ["last"]}
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Channel Depths",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Channel Depths",
+      "description": "Current depth of all in-process Go channels (ActivateCh, SendSMSCh, DLRCh, MOCh, MessageLogCh, CardStateCh)",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 10},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "ota_bus_activate_ch_depth",
+          "legendFormat": "ActivateCh"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "ota_bus_send_sms_ch_depth",
+          "legendFormat": "SendSMSCh"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "ota_bus_dlr_ch_depth",
+          "legendFormat": "DLRCh"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "ota_bus_mo_ch_depth",
+          "legendFormat": "MOCh"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "ota_bus_message_log_ch_depth",
+          "legendFormat": "MessageLogCh"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "ota_bus_card_state_ch_depth",
+          "legendFormat": "CardStateCh"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Handler Timing",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Activate p50 by Op",
+      "description": "Median (p50) latency for each I/O operation in handleActivate",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"activate\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Activate p95 by Op",
+      "description": "95th percentile latency for each I/O operation in handleActivate",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 19},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"activate\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "DLR p50 by Op",
+      "description": "Median (p50) latency for each I/O operation in handleDLR",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"dlr\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "MO p50 by Op",
+      "description": "Median (p50) latency for each I/O operation in handleMO",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le, op) (rate(ota_executor_op_duration_ms_bucket{handler=\"mo\"}[$__rate_interval])))",
+          "legendFormat": "{{op}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Writer Performance",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 35},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "State Writer Rows/sec",
+      "description": "Rate of rows written by the batched card state writer",
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "sum(rate(ota_state_writer_rows_written_total[$__rate_interval]))",
+          "legendFormat": "Rows Written"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ops",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "State Writer Flush Duration p95",
+      "description": "95th percentile flush duration for the card state writer batch",
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(ota_state_writer_flush_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"]}
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Batch Sizes",
+      "description": "Median batch sizes for state writer flushes",
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 36},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(ota_state_writer_batch_size_bucket[$__rate_interval])))",
+          "legendFormat": "State Writer p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "short",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "last"]}
+      }
+    },
+
+    {
+      "type": "row",
+      "title": "Event Processing",
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 44},
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "Processing Duration p50/p95",
+      "description": "End-to-end processing duration by event type at p50 and p95",
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 45},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.50, sum by (le, ota_event_type) (rate(ota_executor_processing_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p50 {{ota_event_type}}"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "histogram_quantile(0.95, sum by (le, ota_event_type) (rate(ota_executor_processing_duration_ms_bucket[$__rate_interval])))",
+          "legendFormat": "p95 {{ota_event_type}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "unit": "ms",
+          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
+        },
+        "overrides": []
+      },
+      "options": {
+        "tooltip": {"mode": "multi", "sort": "desc"},
+        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
+      }
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "tags": ["ota", "engine"],
+  "templating": {"list": []},
+  "time": {"from": "now-30m", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OTA Engine",
+  "uid": "ota-engine",
+  "version": 1
+}

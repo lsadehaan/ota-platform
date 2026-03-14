@@ -189,17 +189,44 @@ type CardGroupMember struct {
 	Card        Card      `gorm:"foreignKey:CardID" json:"card,omitempty"`
 }
 
+// CardExecutionState tracks per-card execution state within a campaign (Postgres).
+type CardExecutionState struct {
+	CardID        uuid.UUID  `gorm:"type:uuid;primaryKey" json:"card_id"`
+	CampaignID    uuid.UUID  `gorm:"type:uuid;primaryKey;index" json:"campaign_id"`
+	Status        string     `gorm:"not null;default:'pending'" json:"status"`
+	CurrentStep   int        `gorm:"not null;default:0" json:"current_step"`
+	RetryCount    int        `gorm:"not null;default:0" json:"retry_count"`
+	LastMsgID     *uuid.UUID `gorm:"type:uuid" json:"last_msg_id,omitempty"`
+	LastSMPPID    string     `gorm:"column:last_smpp_id" json:"last_smpp_id"`
+	LastError     string     `json:"last_error"`
+	TransitionSeq int64     `gorm:"not null;default:0" json:"transition_seq"`
+	UpdatedAt     time.Time  `gorm:"not null" json:"updated_at"`
+}
+
+// CampaignStatsRow tracks aggregate card status counters per campaign (Postgres).
+type CampaignStatsRow struct {
+	CampaignID uuid.UUID `gorm:"type:uuid;primaryKey" json:"campaign_id"`
+	Total      int64     `gorm:"not null;default:0" json:"total"`
+	Pending    int64     `gorm:"not null;default:0" json:"pending"`
+	InProgress int64     `gorm:"not null;default:0" json:"in_progress"`
+	Completed  int64     `gorm:"not null;default:0" json:"completed"`
+	Failed     int64     `gorm:"not null;default:0" json:"failed"`
+	Skipped    int64     `gorm:"not null;default:0" json:"skipped"`
+}
+
 // TableName overrides for GORM table name resolution.
 
-func (Profile) TableName() string         { return "profiles" }
-func (Application) TableName() string     { return "applications" }
-func (Card) TableName() string            { return "cards" }
-func (CardCounter) TableName() string     { return "card_counters" }
-func (Campaign) TableName() string        { return "campaigns" }
-func (CampaignCommand) TableName() string { return "campaign_commands" }
-func (CampaignTarget) TableName() string  { return "campaign_targets" }
-func (CampaignShard) TableName() string   { return "campaign_shards" }
-func (CAPFile) TableName() string         { return "cap_files" }
-func (Script) TableName() string          { return "scripts" }
-func (CardGroup) TableName() string       { return "card_groups" }
-func (CardGroupMember) TableName() string { return "card_group_members" }
+func (Profile) TableName() string                 { return "profiles" }
+func (Application) TableName() string             { return "applications" }
+func (Card) TableName() string                    { return "cards" }
+func (CardCounter) TableName() string             { return "card_counters" }
+func (Campaign) TableName() string                { return "campaigns" }
+func (CampaignCommand) TableName() string         { return "campaign_commands" }
+func (CampaignTarget) TableName() string          { return "campaign_targets" }
+func (CampaignShard) TableName() string           { return "campaign_shards" }
+func (CAPFile) TableName() string                 { return "cap_files" }
+func (Script) TableName() string                  { return "scripts" }
+func (CardGroup) TableName() string               { return "card_groups" }
+func (CardGroupMember) TableName() string         { return "card_group_members" }
+func (CardExecutionState) TableName() string      { return "card_execution_states" }
+func (CampaignStatsRow) TableName() string        { return "campaign_stats" }

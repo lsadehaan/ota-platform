@@ -78,7 +78,7 @@ func (a *API) ListProfiles(c *gin.Context) {
 	query := a.db.Model(&db.Profile{})
 
 	if search := c.Query("search"); search != "" {
-		query = query.Where("name ILIKE ? ESCAPE '\\\\'", "%"+escapeLike(search)+"%")
+		query = query.Where("name ILIKE ? ESCAPE '\\'", "%"+escapeLike(search)+"%")
 	}
 
 	if err := query.

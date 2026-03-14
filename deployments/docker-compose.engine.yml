@@ -1,0 +1,273 @@
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    shm_size: '512m'
+    command:
+      - postgres
+      - -c
+      - shared_preload_libraries=timescaledb,pg_stat_statements
+      - -c
+      - pg_stat_statements.max=10000
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - synchronous_commit=off
+      - -c
+      - max_wal_size=4GB
+      - -c
+      - wal_compression=on
+    environment:
+      POSTGRES_USER: ota
+      POSTGRES_PASSWORD: ota_secret
+      POSTGRES_DB: ota_platform
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ota"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  db-migrate:
+    build:
+      context: ..
+      dockerfile: cmd/db-migrate/Dockerfile
+    environment:
+      DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ota-engine:
+    build:
+      context: ..
+      dockerfile: cmd/ota-engine/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
+      OTA_API_PORT: "8080"
+      SMPP_HOST: mock-smsc
+      SMPP_PORT: "2775"
+      SMPP_SYSTEM_ID: ota_user
+      SMPP_PASSWORD: ota_pass
+      SMPP_SOURCE_ADDR: "357"
+      ALLOWED_ORIGINS: http://localhost:3001,http://10.100.0.1:3001
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      GOMEMLIMIT: "2GiB"
+      PLANNER_CLAIM_BATCH_SIZE: "5000"
+      ENGINE_STATE_WRITER_WORKERS: "4"
+      ENGINE_MSG_WRITER_WORKERS: "4"
+      ENGINE_STATE_WRITER_BATCH: "10000"
+      ENGINE_MSG_WRITER_BATCH: "10000"
+      ENGINE_STATE_WRITER_FLUSH_MS: "2000"
+      ENGINE_MSG_WRITER_FLUSH_MS: "2000"
+      ENGINE_MSG_LOG_DISABLED: "true"
+    depends_on:
+      db-migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      mock-smsc:
+        condition: service_started
+
+  mock-smsc:
+    build:
+      context: ..
+      dockerfile: cmd/mock-smsc/Dockerfile
+    environment:
+      SMSC_PORT: "2775"
+      DLR_DELAY_MS: "50"
+      DLR_SUCCESS_RATE: "1.0"
+      ENABLE_MO: "true"
+      MO_DELAY_MS: "25"
+      MO_PAYLOAD_HEX: "000B0A01020300000000000000"
+
+  smsc-gateway:
+    build:
+      context: ..
+      dockerfile: cmd/smsc-gateway/Dockerfile
+    profiles: ["gateway"]
+    ports:
+      - "2776:2776"
+      - "8082:8080"
+      - "9092:9090"
+    environment:
+      GW_LISTEN_ADDR: ":2776"
+      GW_HTTP_ADDR: ":8080"
+      GW_SMSC_HOST: mock-smsc
+      GW_SMSC_PORT: "2775"
+      GW_SMSC_SYSTEM_ID: smppclient
+      GW_SMSC_PASSWORD: password
+      GW_SMSC_SOURCE_ADDR: "357"
+      GW_POOL_CONNECTIONS: "5"
+      GW_POOL_WINDOW_SIZE: "10"
+      GW_DATA_DIR: /data/smscgw
+      GW_JWT_SECRET: "smscgw-dev-secret-change-in-prod"
+    volumes:
+      - smscgw-data:/data/smscgw
+    depends_on:
+      mock-smsc:
+        condition: service_started
+
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3000"
+    environment:
+      INTERNAL_API_URL: http://ota-engine:8080
+      NEXT_PUBLIC_API_PORT: "8080"
+      NEXT_PUBLIC_GRAFANA_URL: http://localhost:3002
+    depends_on:
+      - ota-engine
+
+  # --- Observability ---
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    command:
+      - '--path.rootfs=/host'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    restart: unless-stopped
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:rw
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /dev/disk:/dev/disk:ro
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    environment:
+      DATA_SOURCE_NAME: postgresql://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
+      PG_EXPORTER_EXTEND_QUERY_PATH: /etc/postgres_exporter/queries.yaml
+    volumes:
+      - ./observability/postgres-exporter/queries.yaml:/etc/postgres_exporter/queries.yaml:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  prometheus-config:
+    image: docker:27-cli
+    user: "0:0"
+    entrypoint: ["/bin/sh", "/scripts/generate-config.sh"]
+    environment:
+      COMPOSE_PROJECT_NAME: deployments
+      PROMETHEUS_OUT: /out/prometheus.yml
+    volumes:
+      - ./observability/prometheus/generate-config-engine.sh:/scripts/generate-config.sh:ro
+      - prometheus-config:/out
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      ota-engine:
+        condition: service_started
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "9464:9464"
+
+  prometheus:
+    image: prom/prometheus:latest
+    command: ["--config.file=/etc/prometheus/prometheus.yml"]
+    volumes:
+      - prometheus-config:/etc/prometheus:ro
+    ports:
+      - "9090:9090"
+    depends_on:
+      prometheus-config:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+      cadvisor:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana-oss:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3002:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+
+  # --- Tool containers (profiles: ["tools"]) ---
+
+  toolbox:
+    build:
+      context: ..
+      dockerfile: deployments/toolbox/Dockerfile
+    profiles: ["tools"]
+    working_dir: /workspace
+    command: sleep infinity
+    volumes:
+      - ..:/workspace
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
+  seed-card-dataset-runner:
+    build:
+      context: ..
+      dockerfile: deployments/toolbox/Dockerfile
+    profiles: ["tools"]
+    working_dir: /workspace
+    entrypoint: ["bash", "-c"]
+    command: ["go run ./cmd/seed-card-dataset "]
+    volumes:
+      - ..:/workspace
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
+  e2e-load-runner:
+    build:
+      context: ..
+      dockerfile: deployments/toolbox/Dockerfile
+    profiles: ["tools"]
+    working_dir: /workspace
+    entrypoint: ["bash", "-c"]
+    command: ["go run ./cmd/e2e-load-runner "]
+    volumes:
+      - ..:/workspace
+      - gomodcache:/go/pkg/mod
+      - gobuildcache:/root/.cache/go-build
+
+volumes:
+  pgdata:
+  prometheus-config:
+  gomodcache:
+  gobuildcache:
+  smscgw-data:

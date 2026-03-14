@@ -13,6 +13,10 @@ export function HexViewer({ data, maxPreviewLength = 64 }: HexViewerProps) {
   const [expanded, setExpanded] = useState(false)
   const [copied, setCopied] = useState(false)
 
+  if (!data) {
+    return <span className="text-muted-foreground text-sm">No data</span>
+  }
+
   const normalized = data.replace(/\s/g, "").toUpperCase()
   const needsTruncation = normalized.length > maxPreviewLength
   const displayValue = expanded || !needsTruncation
@@ -35,10 +39,6 @@ export function HexViewer({ data, maxPreviewLength = 64 }: HexViewerProps) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
-  }
-
-  if (!data) {
-    return <span className="text-muted-foreground text-sm">No data</span>
   }
 
   return (
