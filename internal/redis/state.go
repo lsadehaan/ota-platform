@@ -44,12 +44,13 @@ func (c *Client) decryptData(ciphertext []byte) ([]byte, error) {
 
 // CardState represents the current processing state of a card within a campaign.
 type CardState struct {
-	CampaignID  string `json:"campaign_id"`
-	CurrentStep int    `json:"current_step"`
-	Status      string `json:"status"` // pending, sending, awaiting_dlr, awaiting_mo, completed, failed
-	RetryCount  int    `json:"retry_count"`
-	LastMsgID   string `json:"last_msg_id"`
-	LastEventID string `json:"last_event_id"`
+	CampaignID    string `json:"campaign_id"`
+	CurrentStep   int    `json:"current_step"`
+	Status        string `json:"status"` // pending, sending, awaiting_dlr, awaiting_mo, completed, failed
+	RetryCount    int    `json:"retry_count"`
+	LastMsgID     string `json:"last_msg_id"`
+	LastEventID   string `json:"last_event_id"`
+	TransitionSeq int64  `json:"transition_seq"` // monotonic per card_id, for idempotent projections
 }
 
 func cardStateKey(cardID string) string {
@@ -71,14 +72,16 @@ func (c *Client) GetCardState(ctx context.Context, cardID string) (*CardState, e
 
 	currentStep, _ := strconv.Atoi(result["current_step"])
 	retryCount, _ := strconv.Atoi(result["retry_count"])
+	transitionSeq, _ := strconv.ParseInt(result["transition_seq"], 10, 64)
 
 	return &CardState{
-		CampaignID:  result["campaign_id"],
-		CurrentStep: currentStep,
-		Status:      result["status"],
-		RetryCount:  retryCount,
-		LastMsgID:   result["last_msg_id"],
-		LastEventID: result["last_event_id"],
+		CampaignID:    result["campaign_id"],
+		CurrentStep:   currentStep,
+		Status:        result["status"],
+		RetryCount:    retryCount,
+		LastMsgID:     result["last_msg_id"],
+		LastEventID:   result["last_event_id"],
+		TransitionSeq: transitionSeq,
 	}, nil
 }
 
@@ -86,12 +89,13 @@ func (c *Client) GetCardState(ctx context.Context, cardID string) (*CardState, e
 func (c *Client) SetCardState(ctx context.Context, cardID string, state *CardState) error {
 	key := cardStateKey(cardID)
 	fields := map[string]interface{}{
-		"campaign_id":   state.CampaignID,
-		"current_step":  state.CurrentStep,
-		"status":        state.Status,
-		"retry_count":   state.RetryCount,
-		"last_msg_id":   state.LastMsgID,
-		"last_event_id": state.LastEventID,
+		"campaign_id":    state.CampaignID,
+		"current_step":   state.CurrentStep,
+		"status":         state.Status,
+		"retry_count":    state.RetryCount,
+		"last_msg_id":    state.LastMsgID,
+		"last_event_id":  state.LastEventID,
+		"transition_seq": state.TransitionSeq,
 	}
 
 	pipe := c.rdb.Pipeline()
@@ -292,25 +296,12 @@ func (c *Client) GetCampaignStatus(ctx context.Context, campaignID string) (stri
 }
 
 // ---------------------------------------------------------------------------
-// MSISDN → Card Mapping
-// ---------------------------------------------------------------------------
-
-// StoreMSISDNMapping stores a persistent MSISDN→card_id mapping with a 24-hour TTL.
-// This is set when card keys are cached, since the MSISDN is known at that point.
-func (c *Client) StoreMSISDNMapping(ctx context.Context, msisdn, cardID string) error {
-	key := "msisdn:" + msisdn
-	return c.rdb.Set(ctx, key, cardID, 24*time.Hour).Err()
-}
-
-// LookupCardByMSISDN resolves a card_id from an MSISDN using the persistent mapping.
-func (c *Client) LookupCardByMSISDN(ctx context.Context, msisdn string) (string, error) {
-	key := "msisdn:" + msisdn
-	return c.rdb.Get(ctx, key).Result()
-}
-
-// ---------------------------------------------------------------------------
 // Multipart SMS DLR Tracking
 // ---------------------------------------------------------------------------
+
+// ErrNoMultipartTracking is returned by RecordPartDLR when the message
+// has no multipart tracking initialised (i.e. it is a single-part message).
+var ErrNoMultipartTracking = errors.New("no multipart tracking")
 
 // InitMultipartTracking initializes tracking for a multipart SMS message.
 func (c *Client) InitMultipartTracking(ctx context.Context, msgID string, totalParts int) error {
@@ -322,37 +313,46 @@ func (c *Client) InitMultipartTracking(ctx context.Context, msgID string, totalP
 	return err
 }
 
-// RecordPartDLR records a DLR for one part of a multipart SMS and returns
-// whether all parts have been resolved and whether any part failed.
+// recordPartDLRScript atomically increments the DLR field and returns the
+// current state in a single Redis round-trip, eliminating the race condition
+// where two concurrent DLRs could both observe allResolved=true.
+var recordPartDLRScript = redis.NewScript(`
+local exists = redis.call('EXISTS', KEYS[1])
+if exists == 0 then
+    return {0, 0, 0, 0}
+end
+redis.call('HINCRBY', KEYS[1], ARGV[1], 1)
+local total = tonumber(redis.call('HGET', KEYS[1], 'total')) or 0
+local delivered = tonumber(redis.call('HGET', KEYS[1], 'delivered')) or 0
+local failed = tonumber(redis.call('HGET', KEYS[1], 'failed')) or 0
+return {1, total, delivered, failed}
+`)
+
+// RecordPartDLR atomically records a DLR for one part of a multipart SMS
+// and returns whether all parts have been resolved and whether any part failed.
 func (c *Client) RecordPartDLR(ctx context.Context, msgID string, delivered bool) (allResolved bool, anyFailed bool, err error) {
 	key := "multipart:" + msgID
-
-	// Check if multipart tracking exists first.
-	exists, err := c.rdb.Exists(ctx, key).Result()
-	if err != nil {
-		return false, false, err
-	}
-	if exists == 0 {
-		return false, false, fmt.Errorf("no multipart tracking for msg %s", msgID)
-	}
-
 	field := "delivered"
 	if !delivered {
 		field = "failed"
 	}
-	if _, err := c.rdb.HIncrBy(ctx, key, field, 1).Result(); err != nil {
-		return false, false, err
-	}
-	vals, err := c.rdb.HGetAll(ctx, key).Result()
+
+	result, err := recordPartDLRScript.Run(ctx, c.rdb, []string{key}, field).Int64Slice()
 	if err != nil {
-		return false, false, err
+		return false, false, fmt.Errorf("record part DLR lua: %w", err)
 	}
-	total, _ := strconv.ParseInt(vals["total"], 10, 64)
+	if len(result) < 4 {
+		return false, false, fmt.Errorf("unexpected lua result length: %d", len(result))
+	}
+	if result[0] == 0 {
+		return false, false, ErrNoMultipartTracking
+	}
+	total := result[1]
 	if total <= 0 {
 		return false, false, fmt.Errorf("multipart tracking for msg %s has invalid total: %d", msgID, total)
 	}
-	del, _ := strconv.ParseInt(vals["delivered"], 10, 64)
-	fail, _ := strconv.ParseInt(vals["failed"], 10, 64)
+	del := result[2]
+	fail := result[3]
 	allResolved = (del + fail) >= total
 	anyFailed = fail > 0
 	return allResolved, anyFailed, nil

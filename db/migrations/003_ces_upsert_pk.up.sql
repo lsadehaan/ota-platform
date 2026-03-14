@@ -1,0 +1,2 @@
+-- No-op: keep the append-only PK (card_id, campaign_id, transition_seq).
+-- This migration exists to maintain migration numbering consistency.

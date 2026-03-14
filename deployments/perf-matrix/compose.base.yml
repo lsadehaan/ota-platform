@@ -1,0 +1,15 @@
+# Base network and logical service names for SMSC benchmark runs.
+#
+# Overlays are expected to provide:
+# - `central-sut`
+# - `downstream-smsc`
+# - optional `loadgen-esme`
+#
+# This file intentionally contains only shared volumes and network shape.
+
+services: {}
+
+volumes:
+  perf-sut-data:
+  perf-prometheus-data:
+  perf-grafana-data:

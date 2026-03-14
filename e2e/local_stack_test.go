@@ -69,11 +69,13 @@ func TestLocalStackCampaignLifecycle(t *testing.T) {
 	client := &apiClient{
 		baseURL: getenv("E2E_BASE_URL", "http://localhost:8080"),
 		http: &http.Client{
-			Timeout: 5 * time.Minute,
+			Timeout: getenvDuration("E2E_HTTP_TIMEOUT", 10*time.Minute),
 		},
 	}
 	cardCount := getenvInt("E2E_CARD_COUNT", 50)
-	campaignTimeout := getenvDuration("E2E_CAMPAIGN_TIMEOUT", 2*time.Minute)
+	// Scale timeout with card count: 2 min base, plus ~1s per 100 cards for processing.
+	defaultTimeout := 2*time.Minute + time.Duration(cardCount/100)*time.Second
+	campaignTimeout := getenvDuration("E2E_CAMPAIGN_TIMEOUT", defaultTimeout)
 	expectResponse := getenvBool("E2E_EXPECT_RESPONSE", true)
 	porProtocol := getenv("E2E_POR_PROTOCOL", "SMS_SUBMIT")
 	if err := waitForHealthy(client, 2*time.Minute); err != nil {
@@ -245,7 +247,7 @@ func importCardsCSV(t *testing.T, client *apiClient, prefix, profileName string,
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 
-	importClient := &http.Client{Timeout: 5 * time.Minute}
+	importClient := &http.Client{Timeout: getenvDuration("E2E_HTTP_TIMEOUT", 10*time.Minute)}
 	resp, err := importClient.Do(req)
 	if err != nil {
 		return err

@@ -10,6 +10,40 @@
   "panels": [
     {
       "type": "timeseries",
+      "title": "Container Memory MiB by service group",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "expr": "sum(container_memory_working_set_bytes{name=~\".*ota-engine.*|.*mock-smsc.*|.*postgres.*\"}) by (name) / 1024 / 1024",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container CPU % by service group (30s)",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(container_cpu_usage_seconds_total{name=~\".*ota-engine.*|.*mock-smsc.*|.*postgres.*\"}[$__rate_interval])) by (name) * 100",
+          "legendFormat": "{{name}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
       "title": "Pipeline TPS Instant (irate 30s)",
       "gridPos": {
         "h": 8,
@@ -361,7 +395,7 @@
       "title": "Gateway SMPP p95 latency (1m)",
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 12,
         "x": 0,
         "y": 44
       },
@@ -377,8 +411,8 @@
       "title": "Executor card.activate p95 latency (1m)",
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 12,
+        "x": 12,
         "y": 44
       },
       "targets": [
@@ -387,248 +421,6 @@
           "legendFormat": "card.activate"
         }
       ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Projector p95 flush latency (1m)",
-      "gridPos": {
-        "h": 8,
-        "w": 8,
-        "x": 16,
-        "y": 44
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.95, sum(rate(ota_projector_flush_duration_ms_bucket[1m])) by (le))",
-          "legendFormat": "p95"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Container CPU % by service group (30s)",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 8
-      },
-      "targets": [
-        {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{service=\"kafka\"}[30s]))*100",
-          "legendFormat": "kafka",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{service=\"scylla\"}[30s]))*100",
-          "legendFormat": "scylla",
-          "refId": "B"
-        },
-        {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{service=\"card-executor\"}[30s]))*100",
-          "legendFormat": "executors",
-          "refId": "C"
-        },
-        {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{service=\"sms-gateway\"}[30s]))*100",
-          "legendFormat": "gateways",
-          "refId": "D"
-        },
-        {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{service=\"read-model-projector\"}[30s]))*100",
-          "legendFormat": "projector",
-          "refId": "E"
-        },
-        {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{service=\"dragonfly\"}[30s]))*100",
-          "legendFormat": "dragonfly",
-          "refId": "F"
-        },
-        {
-          "expr": "sum(rate(container_cpu_usage_seconds_total{service=\"ota-api\"}[30s]))*100",
-          "legendFormat": "ota-api",
-          "refId": "G"
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Container Memory MiB by service group",
-      "gridPos": {
-        "h": 8,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "targets": [
-        {
-          "expr": "sum(container_memory_working_set_bytes{service=\"kafka\"})/1024/1024",
-          "legendFormat": "kafka",
-          "refId": "A"
-        },
-        {
-          "expr": "sum(container_memory_working_set_bytes{service=\"scylla\"})/1024/1024",
-          "legendFormat": "scylla",
-          "refId": "B"
-        },
-        {
-          "expr": "sum(container_memory_working_set_bytes{service=\"card-executor\"})/1024/1024",
-          "legendFormat": "executors",
-          "refId": "C"
-        },
-        {
-          "expr": "sum(container_memory_working_set_bytes{service=\"sms-gateway\"})/1024/1024",
-          "legendFormat": "gateways",
-          "refId": "D"
-        },
-        {
-          "expr": "sum(container_memory_working_set_bytes{service=\"read-model-projector\"})/1024/1024",
-          "legendFormat": "projector",
-          "refId": "E"
-        },
-        {
-          "expr": "sum(container_memory_working_set_bytes{service=\"dragonfly\"})/1024/1024",
-          "legendFormat": "dragonfly",
-          "refId": "F"
-        },
-        {
-          "expr": "sum(container_memory_working_set_bytes{service=\"ota-api\"})/1024/1024",
-          "legendFormat": "ota-api",
-          "refId": "G"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "Error & Retry Rates",
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 52
-      },
-      "collapsed": false,
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Kafka Publish Errors/sec",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 53
-      },
-      "targets": [
-        {
-          "expr": "rate(ota_kafka_publish_errors_total[1m])",
-          "legendFormat": "publish errors"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "barAlignment": 0,
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "spanNulls": false,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "errors/sec",
-            "axisColorMode": "text",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        }
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Projector Write Retries/sec",
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 53
-      },
-      "targets": [
-        {
-          "expr": "rate(ota_projector_write_retries_total[1m])",
-          "legendFormat": "write retries"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "linear",
-            "barAlignment": 0,
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "spanNulls": false,
-            "showPoints": "never",
-            "pointSize": 5,
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "axisPlacement": "auto",
-            "axisLabel": "retries/sec",
-            "axisColorMode": "text",
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "hideFrom": {
-              "tooltip": false,
-              "viz": false,
-              "legend": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          }
-        }
-      },
-      "options": {
-        "legend": {
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      }
     }
   ],
   "refresh": "2s",

@@ -1,5 +1,8 @@
 # Go
 /bin/
+/ota-engine
+/smsc-gateway
+/smpp-probe-smsc
 /card-executor
 /ota-api
 /campaign-planner
@@ -49,3 +52,4 @@ tmp/
 
 # Worktrees
 .worktrees/
+__pycache__/

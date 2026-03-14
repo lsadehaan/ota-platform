@@ -11,9 +11,9 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/pipeline"
 	redispkg "ota-platform/internal/redis"
-	scyllastore "ota-platform/internal/scylla"
+	"ota-platform/internal/store"
 )
 
 type campaignTestStore struct{}
@@ -25,16 +25,16 @@ func (campaignTestStore) SetCampaignStatus(context.Context, string, string) erro
 
 type campaignTestQueryStore struct{}
 
-func (campaignTestQueryStore) GetCardState(context.Context, uuid.UUID) (*scyllastore.CardStateRecord, error) {
+func (campaignTestQueryStore) GetCardState(context.Context, uuid.UUID) (*store.CardStateRecord, error) {
 	return nil, nil
 }
-func (campaignTestQueryStore) CampaignStats(context.Context, uuid.UUID) (scyllastore.CampaignStats, error) {
-	return scyllastore.CampaignStats{}, nil
+func (campaignTestQueryStore) CampaignStats(context.Context, uuid.UUID) (store.CampaignStats, error) {
+	return store.CampaignStats{}, nil
 }
-func (campaignTestQueryStore) CampaignStatsBatch(context.Context, []uuid.UUID) (map[uuid.UUID]scyllastore.CampaignStats, error) {
-	return map[uuid.UUID]scyllastore.CampaignStats{}, nil
+func (campaignTestQueryStore) CampaignStatsBatch(context.Context, []uuid.UUID) (map[uuid.UUID]store.CampaignStats, error) {
+	return map[uuid.UUID]store.CampaignStats{}, nil
 }
-func (campaignTestQueryStore) ListCampaignCards(context.Context, uuid.UUID, string) ([]scyllastore.CampaignCardView, error) {
+func (campaignTestQueryStore) ListCampaignCards(context.Context, uuid.UUID, string) ([]store.CampaignCardView, error) {
 	return nil, nil
 }
 func (campaignTestQueryStore) ListFailedCardIDs(context.Context, uuid.UUID) ([]uuid.UUID, error) {
@@ -49,37 +49,37 @@ func (campaignTestQueryStore) InitializeCampaign(context.Context, uuid.UUID, []u
 func (campaignTestQueryStore) AbortCampaign(context.Context, uuid.UUID, time.Time) (int, error) {
 	return 0, nil
 }
-func (campaignTestQueryStore) GetMessage(context.Context, uuid.UUID) (*scyllastore.MessageRecord, error) {
+func (campaignTestQueryStore) GetMessage(context.Context, uuid.UUID) (*store.MessageRecord, error) {
 	return nil, nil
 }
-func (campaignTestQueryStore) ListCardMessages(context.Context, uuid.UUID, int) ([]scyllastore.MessageRecord, error) {
+func (campaignTestQueryStore) ListCardMessages(context.Context, uuid.UUID, int) ([]store.MessageRecord, error) {
 	return nil, nil
 }
-func (campaignTestQueryStore) ListMessages(context.Context, scyllastore.MessageFilter) ([]scyllastore.MessageRecord, int64, error) {
+func (campaignTestQueryStore) ListMessages(context.Context, store.MessageFilter) ([]store.MessageRecord, int64, error) {
 	return nil, 0, nil
 }
-func (campaignTestQueryStore) RecentActivity(context.Context, int) ([]scyllastore.MessageRecord, error) {
+func (campaignTestQueryStore) RecentActivity(context.Context, int) ([]store.MessageRecord, error) {
 	return nil, nil
 }
-func (campaignTestQueryStore) MessageMetrics(context.Context, time.Time) (scyllastore.MessageMetrics, error) {
-	return scyllastore.MessageMetrics{}, nil
+func (campaignTestQueryStore) MessageMetrics(context.Context, time.Time) (store.MessageMetrics, error) {
+	return store.MessageMetrics{}, nil
 }
-func (campaignTestQueryStore) CampaignMessageMetrics(context.Context, uuid.UUID, time.Time) (scyllastore.MessageMetrics, error) {
-	return scyllastore.MessageMetrics{}, nil
+func (campaignTestQueryStore) CampaignMessageMetrics(context.Context, uuid.UUID, time.Time) (store.MessageMetrics, error) {
+	return store.MessageMetrics{}, nil
 }
-func (campaignTestQueryStore) Throughput(context.Context, time.Time) ([]scyllastore.ThroughputPoint, error) {
+func (campaignTestQueryStore) Throughput(context.Context, time.Time) ([]store.ThroughputPoint, error) {
 	return nil, nil
 }
-func (campaignTestQueryStore) CampaignThroughput(context.Context, uuid.UUID, time.Time) ([]scyllastore.ThroughputPoint, error) {
+func (campaignTestQueryStore) CampaignThroughput(context.Context, uuid.UUID, time.Time) ([]store.ThroughputPoint, error) {
 	return nil, nil
 }
-func (campaignTestQueryStore) MinuteThroughput(context.Context) ([]scyllastore.ThroughputPoint, error) {
+func (campaignTestQueryStore) MinuteThroughput(context.Context) ([]store.ThroughputPoint, error) {
 	return nil, nil
 }
-func (campaignTestQueryStore) ErrorSummary(context.Context, time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error) {
+func (campaignTestQueryStore) ErrorSummary(context.Context, time.Time) ([]store.ErrorCount, []store.ErrorCount, []store.ErrorCount, error) {
 	return nil, nil, nil, nil
 }
-func (campaignTestQueryStore) CampaignErrorSummary(context.Context, uuid.UUID, time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error) {
+func (campaignTestQueryStore) CampaignErrorSummary(context.Context, uuid.UUID, time.Time) ([]store.ErrorCount, []store.ErrorCount, []store.ErrorCount, error) {
 	return nil, nil, nil, nil
 }
 
@@ -88,16 +88,16 @@ type trackingCampaignQueryStore struct {
 	initializeCards int
 }
 
-func (s *trackingCampaignQueryStore) GetCardState(context.Context, uuid.UUID) (*scyllastore.CardStateRecord, error) {
+func (s *trackingCampaignQueryStore) GetCardState(context.Context, uuid.UUID) (*store.CardStateRecord, error) {
 	return nil, nil
 }
-func (s *trackingCampaignQueryStore) CampaignStats(context.Context, uuid.UUID) (scyllastore.CampaignStats, error) {
-	return scyllastore.CampaignStats{}, nil
+func (s *trackingCampaignQueryStore) CampaignStats(context.Context, uuid.UUID) (store.CampaignStats, error) {
+	return store.CampaignStats{}, nil
 }
-func (s *trackingCampaignQueryStore) CampaignStatsBatch(context.Context, []uuid.UUID) (map[uuid.UUID]scyllastore.CampaignStats, error) {
-	return map[uuid.UUID]scyllastore.CampaignStats{}, nil
+func (s *trackingCampaignQueryStore) CampaignStatsBatch(context.Context, []uuid.UUID) (map[uuid.UUID]store.CampaignStats, error) {
+	return map[uuid.UUID]store.CampaignStats{}, nil
 }
-func (s *trackingCampaignQueryStore) ListCampaignCards(context.Context, uuid.UUID, string) ([]scyllastore.CampaignCardView, error) {
+func (s *trackingCampaignQueryStore) ListCampaignCards(context.Context, uuid.UUID, string) ([]store.CampaignCardView, error) {
 	return nil, nil
 }
 func (s *trackingCampaignQueryStore) ListFailedCardIDs(context.Context, uuid.UUID) ([]uuid.UUID, error) {
@@ -114,37 +114,37 @@ func (s *trackingCampaignQueryStore) InitializeCampaign(_ context.Context, _ uui
 func (s *trackingCampaignQueryStore) AbortCampaign(context.Context, uuid.UUID, time.Time) (int, error) {
 	return 0, nil
 }
-func (s *trackingCampaignQueryStore) GetMessage(context.Context, uuid.UUID) (*scyllastore.MessageRecord, error) {
+func (s *trackingCampaignQueryStore) GetMessage(context.Context, uuid.UUID) (*store.MessageRecord, error) {
 	return nil, nil
 }
-func (s *trackingCampaignQueryStore) ListCardMessages(context.Context, uuid.UUID, int) ([]scyllastore.MessageRecord, error) {
+func (s *trackingCampaignQueryStore) ListCardMessages(context.Context, uuid.UUID, int) ([]store.MessageRecord, error) {
 	return nil, nil
 }
-func (s *trackingCampaignQueryStore) ListMessages(context.Context, scyllastore.MessageFilter) ([]scyllastore.MessageRecord, int64, error) {
+func (s *trackingCampaignQueryStore) ListMessages(context.Context, store.MessageFilter) ([]store.MessageRecord, int64, error) {
 	return nil, 0, nil
 }
-func (s *trackingCampaignQueryStore) RecentActivity(context.Context, int) ([]scyllastore.MessageRecord, error) {
+func (s *trackingCampaignQueryStore) RecentActivity(context.Context, int) ([]store.MessageRecord, error) {
 	return nil, nil
 }
-func (s *trackingCampaignQueryStore) MessageMetrics(context.Context, time.Time) (scyllastore.MessageMetrics, error) {
-	return scyllastore.MessageMetrics{}, nil
+func (s *trackingCampaignQueryStore) MessageMetrics(context.Context, time.Time) (store.MessageMetrics, error) {
+	return store.MessageMetrics{}, nil
 }
-func (s *trackingCampaignQueryStore) CampaignMessageMetrics(context.Context, uuid.UUID, time.Time) (scyllastore.MessageMetrics, error) {
-	return scyllastore.MessageMetrics{}, nil
+func (s *trackingCampaignQueryStore) CampaignMessageMetrics(context.Context, uuid.UUID, time.Time) (store.MessageMetrics, error) {
+	return store.MessageMetrics{}, nil
 }
-func (s *trackingCampaignQueryStore) Throughput(context.Context, time.Time) ([]scyllastore.ThroughputPoint, error) {
+func (s *trackingCampaignQueryStore) Throughput(context.Context, time.Time) ([]store.ThroughputPoint, error) {
 	return nil, nil
 }
-func (s *trackingCampaignQueryStore) CampaignThroughput(context.Context, uuid.UUID, time.Time) ([]scyllastore.ThroughputPoint, error) {
+func (s *trackingCampaignQueryStore) CampaignThroughput(context.Context, uuid.UUID, time.Time) ([]store.ThroughputPoint, error) {
 	return nil, nil
 }
-func (s *trackingCampaignQueryStore) MinuteThroughput(context.Context) ([]scyllastore.ThroughputPoint, error) {
+func (s *trackingCampaignQueryStore) MinuteThroughput(context.Context) ([]store.ThroughputPoint, error) {
 	return nil, nil
 }
-func (s *trackingCampaignQueryStore) ErrorSummary(context.Context, time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error) {
+func (s *trackingCampaignQueryStore) ErrorSummary(context.Context, time.Time) ([]store.ErrorCount, []store.ErrorCount, []store.ErrorCount, error) {
 	return nil, nil, nil, nil
 }
-func (s *trackingCampaignQueryStore) CampaignErrorSummary(context.Context, uuid.UUID, time.Time) ([]scyllastore.ErrorCount, []scyllastore.ErrorCount, []scyllastore.ErrorCount, error) {
+func (s *trackingCampaignQueryStore) CampaignErrorSummary(context.Context, uuid.UUID, time.Time) ([]store.ErrorCount, []store.ErrorCount, []store.ErrorCount, error) {
 	return nil, nil, nil, nil
 }
 
@@ -253,7 +253,7 @@ func TestStartCampaignCreatesPlannerShards(t *testing.T) {
 	if shards[0].ItemCount != 2 {
 		t.Fatalf("expected shard item_count 2, got %d", shards[0].ItemCount)
 	}
-	var events []kafkapkg.CardEvent
+	var events []pipeline.CardEvent
 	if err := json.Unmarshal(shards[0].Items, &events); err != nil {
 		t.Fatalf("unmarshal shard events: %v", err)
 	}

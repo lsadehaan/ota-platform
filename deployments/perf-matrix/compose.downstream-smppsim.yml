@@ -1,0 +1,14 @@
+# Downstream SMPPSim overlay for interoperability and throughput benchmarking.
+
+services:
+  downstream-smsc:
+    image: eagafonov/smppsim:latest
+    ports:
+      - "2775:2775"
+      - "8884:88"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2775 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s

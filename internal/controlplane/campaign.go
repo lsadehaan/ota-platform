@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
 	"ota-platform/internal/config"
 	"ota-platform/internal/db"
-	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/pipeline"
 	redispkg "ota-platform/internal/redis"
 	"ota-platform/pkg/gsm0348"
 )
@@ -31,27 +33,49 @@ func campaignShardSize() int {
 // and aborting campaigns. Card-level processing (OTA command building, DLR/MO
 // handling) is delegated to the planner/executor pipeline via campaign shards.
 type CampaignService struct {
-	db     *gorm.DB
-	redis  CoordinationStore
-	query  QueryStore
-	wsHub  *WSHub
-	logger *zap.Logger
+	db                  *gorm.DB
+	redis               CoordinationStore
+	query               QueryStore
+	wsHub               *WSHub
+	logger              *zap.Logger
+	startRejectOverload metric.Int64Counter
 }
 
 // NewCampaignService creates a new CampaignService.
 func NewCampaignService(database *gorm.DB, rdb CoordinationStore, queryStore QueryStore, wsHub *WSHub, logger *zap.Logger) *CampaignService {
+	meter := otel.Meter("controlplane")
+	startRejectOverload, err := meter.Int64Counter("ota.controlplane.campaign_start_rejected_overload_total",
+		metric.WithDescription("Campaign starts rejected due to shard backlog overload"),
+	)
+	if err != nil {
+		logger.Warn("create campaign_start_rejected_overload metric", zap.Error(err))
+	}
 	return &CampaignService{
-		db:     database,
-		redis:  rdb,
-		query:  queryStore,
-		wsHub:  wsHub,
-		logger: logger,
+		db:                  database,
+		redis:               rdb,
+		query:               queryStore,
+		wsHub:               wsHub,
+		logger:              logger,
+		startRejectOverload: startRejectOverload,
 	}
 }
 
 // StartCampaign transitions a campaign from pending to running and persists
 // planner-owned shard manifests in the same transaction as the campaign state.
 func (cs *CampaignService) StartCampaign(ctx context.Context, campaignID uuid.UUID) error {
+	// Admission control: reject if system is already overloaded with pending shards.
+	var pendingShards int64
+	cs.db.WithContext(ctx).Model(&db.CampaignShard{}).
+		Where("status IN ?", []string{"pending", "publishing"}).
+		Count(&pendingShards)
+	maxBacklog := int64(config.GetEnvInt("CAMPAIGN_START_MAX_SHARD_BACKLOG", 1000))
+	if pendingShards > maxBacklog {
+		if cs.startRejectOverload != nil {
+			cs.startRejectOverload.Add(ctx, 1)
+		}
+		return fmt.Errorf("shard backlog high: %d shards pending/publishing across campaigns (max %d) — try again later", pendingShards, maxBacklog)
+	}
+
 	// 1. Load campaign with commands and cards (for validation + shard writes)
 	var campaign db.Campaign
 	err := cs.db.WithContext(ctx).
@@ -101,7 +125,21 @@ func (cs *CampaignService) StartCampaign(ctx context.Context, campaignID uuid.UU
 		}
 	}
 
-	// 3. Persist campaign state and planner shards atomically.
+	// 3. Initialize card execution states FIRST (before shards exist).
+	// This ensures campaign_stats counters are correct before any card processing begins.
+	if cs.query != nil {
+		if err := cs.forEachCampaignTargetBatch(ctx, cs.db.WithContext(ctx), campaignID, campaignShardSize(), func(batch []uuid.UUID) error {
+			if err := cs.query.InitializeCampaign(ctx, campaignID, batch, firstStep, now); err != nil {
+				return fmt.Errorf("initialize campaign query state: %w", err)
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+
+	// 4. Persist campaign state and planner shards atomically.
+	// Shards become visible to the planner only after this transaction commits.
 	var pendingCards int
 	err = cs.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		// Update campaign status
@@ -116,9 +154,9 @@ func (cs *CampaignService) StartCampaign(ctx context.Context, campaignID uuid.UU
 		if err := cs.forEachCampaignTargetBatch(ctx, tx, campaignID, shardSize, func(batch []uuid.UUID) error {
 			pendingCards += len(batch)
 
-			events := make([]kafkapkg.CardEvent, 0, len(batch))
+			events := make([]pipeline.CardEvent, 0, len(batch))
 			for _, cardID := range batch {
-				events = append(events, kafkapkg.CardEvent{
+				events = append(events, pipeline.CardEvent{
 					Type:       "card.activate",
 					EventID:    uuid.New().String(),
 					CardID:     cardID.String(),
@@ -155,17 +193,6 @@ func (cs *CampaignService) StartCampaign(ctx context.Context, campaignID uuid.UU
 	})
 	if err != nil {
 		return fmt.Errorf("start campaign transaction: %w", err)
-	}
-
-	if cs.query != nil {
-		if err := cs.forEachCampaignTargetBatch(ctx, cs.db.WithContext(ctx), campaignID, campaignShardSize(), func(batch []uuid.UUID) error {
-			if err := cs.query.InitializeCampaign(ctx, campaignID, batch, firstStep, now); err != nil {
-				return fmt.Errorf("initialize campaign query state: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return err
-		}
 	}
 
 	// 4. Cache campaign status in the coordination store
@@ -282,7 +309,7 @@ func (cs *CampaignService) ResumeCampaign(ctx context.Context, campaignID uuid.U
 			return err
 		}
 
-		var shardEvents []kafkapkg.CardEvent
+		var shardEvents []pipeline.CardEvent
 		for _, cc := range cardStates {
 			if cc.Status != "pending" && cc.Status != "activating" {
 				continue
@@ -292,7 +319,7 @@ func (cs *CampaignService) ResumeCampaign(ctx context.Context, campaignID uuid.U
 			if step == 0 {
 				step = campaign.CampaignCommands[0].Sequence
 			}
-			shardEvents = append(shardEvents, kafkapkg.CardEvent{
+			shardEvents = append(shardEvents, pipeline.CardEvent{
 				Type:       "card.activate",
 				EventID:    uuid.New().String(),
 				CardID:     cc.CardID,
@@ -392,16 +419,17 @@ func (cs *CampaignService) AbortCampaign(ctx context.Context, campaignID uuid.UU
 		return err
 	}
 
-	if cs.query != nil {
-		if _, err := cs.query.AbortCampaign(ctx, campaignID, now); err != nil {
-			return fmt.Errorf("abort campaign query state: %w", err)
-		}
-	}
-
-	// Update Redis
+	// Update Redis immediately after Postgres — executor checks Redis for
+	// campaign status and must stop processing cards as soon as possible.
 	if cs.redis != nil {
 		if err := cs.redis.SetCampaignStatus(ctx, campaignID.String(), "aborted"); err != nil {
 			cs.logger.Warn("failed to set campaign status in coordination store", zap.Error(err))
+		}
+	}
+
+	if cs.query != nil {
+		if _, err := cs.query.AbortCampaign(ctx, campaignID, now); err != nil {
+			cs.logger.Error("failed to abort campaign in query store", zap.Error(err))
 		}
 	}
 

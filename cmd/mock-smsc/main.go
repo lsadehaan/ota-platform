@@ -9,7 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
-	"ota-platform/internal/mocksmsc"
+	"github.com/idnteq/go-smsc/mocksmsc"
 	"ota-platform/pkg/hexutil"
 )
 

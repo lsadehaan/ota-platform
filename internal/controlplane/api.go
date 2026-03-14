@@ -34,9 +34,17 @@ type API struct {
 	wsHub       *WSHub
 	logger      *zap.Logger
 
+	importKeySyncFailures metric.Int64Counter
+
 	kpiMu          sync.Mutex
 	kpiCached      dashboardKPI
 	kpiCachedUntil time.Time
+
+	// Campaign stats cache: avoids re-scanning 128 ScyllaDB buckets on every poll.
+	statsCacheMu sync.Mutex
+	statsCache   map[string]cachedCampaignStats
+
+	channelStats ChannelStats
 }
 
 func newAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignService, queryStore QueryStore, cardKeys CardKeyWriter, counterRead CounterReader, wsHub *WSHub, logger *zap.Logger) *API {
@@ -52,6 +60,12 @@ func newAPI(database *gorm.DB, rdb *redispkg.Client, campaignSvc *CampaignServic
 	}
 	api.registerMetrics()
 	return api
+}
+
+// SetChannelStats injects a ChannelStats provider (typically the pipeline Bus)
+// so the debug endpoint can report channel depths.
+func (a *API) SetChannelStats(cs ChannelStats) {
+	a.channelStats = cs
 }
 
 func apiKeyAuth(logger *zap.Logger) gin.HandlerFunc {
@@ -263,6 +277,9 @@ func escapeLike(s string) string {
 
 func (a *API) registerMetrics() {
 	meter := otel.Meter("ota-api")
+	a.importKeySyncFailures, _ = meter.Int64Counter("ota.controlplane.card_import_key_sync_failures_total",
+		metric.WithDescription("Card import batches where ScyllaDB key sync failed after Postgres insert"),
+	)
 	_, err := meter.Int64ObservableGauge(
 		"ota.campaigns.active",
 		metric.WithDescription("Number of active campaigns"),

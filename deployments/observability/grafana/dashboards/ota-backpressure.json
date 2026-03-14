@@ -7,67 +7,15 @@
   "panels": [
     {
       "type": "row",
-      "title": "Kafka Consumer Lag",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "Consumer Lag by Topic",
-      "description": "Sum of consumer group lag across all partitions per topic. Rising lag = consumers can't keep up.",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 1},
-      "targets": [
-        {
-          "expr": "sum by (topic) (kafka_consumergroup_lag)",
-          "legendFormat": "{{topic}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi", "sort": "desc"},
-        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Consumer Lag by Group",
-      "description": "Consumer lag per consumer group. Shows which service is falling behind.",
-      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 9},
-      "targets": [
-        {
-          "expr": "sum by (consumergroup, topic) (kafka_consumergroup_lag) > 0",
-          "legendFormat": "{{consumergroup}} / {{topic}}"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi", "sort": "desc"},
-        "legend": {"displayMode": "table", "placement": "right", "calcs": ["mean", "max", "last"]}
-      }
-    },
-    {
-      "type": "row",
       "title": "SMPP Deliver Queue",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 17},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
       "collapsed": false
     },
     {
       "type": "timeseries",
       "title": "SMPP Deliver Queue Depth",
       "description": "Current number of items in the SMPP deliver queue. High values = DLR/MO processing can't keep up.",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 18},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 1},
       "targets": [
         {
           "expr": "ota_smpp_deliver_queue_depth",
@@ -96,124 +44,16 @@
       }
     },
     {
-      "type": "timeseries",
-      "title": "SMPP Deliver Backpressure Events",
-      "description": "Rate of backpressure events on the deliver queue. Any non-zero value = queue is saturated.",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 18},
-      "targets": [
-        {
-          "expr": "rate(ota_smpp_deliver_backpressure_total[1m])",
-          "legendFormat": "backpressure/sec"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 20, "spanNulls": false, "showPoints": "never"},
-          "color": {"fixedColor": "orange", "mode": "fixed"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
-      }
-    },
-    {
-      "type": "stat",
-      "title": "SMPP Deliver Drops (total)",
-      "description": "Messages dropped after 5s backpressure timeout. ANY non-zero value = data loss.",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 18},
-      "targets": [
-        {
-          "expr": "ota_smpp_deliver_queue_drops_total",
-          "legendFormat": "drops"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {"color": "green", "value": null},
-              {"color": "red", "value": 1}
-            ]
-          },
-          "color": {"mode": "thresholds"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {"calcs": ["lastNotNull"]},
-        "colorMode": "background",
-        "textMode": "value_and_name"
-      }
-    },
-    {
-      "type": "row",
-      "title": "Kafka & Projector Errors",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 26},
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "Kafka Publish Errors/sec",
-      "description": "Rate of Kafka publish failures across all producers.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 27},
-      "targets": [
-        {
-          "expr": "sum(rate(ota_kafka_publish_errors_total[1m]))",
-          "legendFormat": "publish errors/sec"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 20, "spanNulls": false, "showPoints": "never"},
-          "color": {"fixedColor": "red", "mode": "fixed"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Projector Write Retries/sec",
-      "description": "Rate of ScyllaDB write retries in the log projector. Non-zero = ScyllaDB under pressure.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 27},
-      "targets": [
-        {
-          "expr": "sum(rate(ota_projector_write_retries_total[1m]))",
-          "legendFormat": "write retries/sec"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 20, "spanNulls": false, "showPoints": "never"},
-          "color": {"fixedColor": "orange", "mode": "fixed"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
-      }
-    },
-    {
       "type": "row",
       "title": "Processing Latency",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 35},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9},
       "collapsed": false
     },
     {
       "type": "timeseries",
       "title": "Executor Event Processing p99 (ms)",
       "description": "99th percentile processing time per event type. Rising latency = early warning of overload.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 36},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 10},
       "targets": [
         {
           "expr": "histogram_quantile(0.99, sum by (le, ota_event_type) (rate(ota_executor_processing_duration_ms_bucket[1m])))",
@@ -234,40 +74,16 @@
       }
     },
     {
-      "type": "timeseries",
-      "title": "Projector Flush Duration p99 (ms)",
-      "description": "99th percentile flush time for the projector batch writer.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 36},
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(ota_projector_flush_duration_ms_bucket[1m])))",
-          "legendFormat": "p99 flush"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 10, "spanNulls": false, "showPoints": "never"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
-      }
-    },
-    {
       "type": "row",
       "title": "Throughput",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 44},
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18},
       "collapsed": false
     },
     {
       "type": "timeseries",
       "title": "Executor Events/sec by Type",
       "description": "Processing rate per event type. Drop in throughput while lag rises = bottleneck.",
-      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 45},
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 19},
       "targets": [
         {
           "expr": "sum by (ota_event_type) (rate(ota_executor_events_processed_total[1m]))",
@@ -285,115 +101,6 @@
       "options": {
         "tooltip": {"mode": "multi", "sort": "desc"},
         "legend": {"displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]}
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Projector Actions/sec",
-      "description": "Message log actions processed per second.",
-      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 45},
-      "targets": [
-        {
-          "expr": "sum(rate(ota_projector_actions_processed_total[1m]))",
-          "legendFormat": "actions/sec"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
-      }
-    },
-    {
-      "type": "row",
-      "title": "Drop & Recovery Counters",
-      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 50},
-      "collapsed": false
-    },
-    {
-      "type": "timeseries",
-      "title": "SMPP Deliver Queue Drops",
-      "description": "Rate of SMPP deliver_sm messages dropped due to backpressure. Non-zero = DLR/MO loss → stale cards.",
-      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 51},
-      "targets": [
-        {
-          "expr": "rate(ota_smpp_deliver_queue_drops_total[1m])",
-          "legendFormat": "drops/s"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"},
-          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Stale Card Recoveries",
-      "description": "Rate of stale non-terminal cards recovered to failed by the reconciler. Non-zero = cards were stuck.",
-      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 51},
-      "targets": [
-        {
-          "expr": "rate(ota_reconciler_stale_cards_recovered_total[1m])",
-          "legendFormat": "recoveries/s"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"},
-          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
-      }
-    },
-    {
-      "type": "timeseries",
-      "title": "Projector Dropped Batches",
-      "description": "Rate of projector batches dropped after max retries. Non-zero = message log data loss.",
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 51},
-      "targets": [
-        {
-          "expr": "rate(ota_projector_create_batch_drops_total[1m])",
-          "legendFormat": "create drops/s"
-        },
-        {
-          "expr": "rate(ota_projector_update_batch_drops_total[1m])",
-          "legendFormat": "update drops/s"
-        }
-      ],
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "min": 0,
-          "custom": {"lineWidth": 2, "fillOpacity": 15, "spanNulls": false, "showPoints": "never"},
-          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.01}]}
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": {"mode": "multi"},
-        "legend": {"displayMode": "list", "placement": "bottom"}
       }
     }
   ],

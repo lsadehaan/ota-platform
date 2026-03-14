@@ -1,0 +1,46 @@
+# System-under-test overlay: current in-repo SMSC Gateway.
+#
+# Topology:
+#   loadgen-esme -> central-sut:2776 -> downstream-smsc:2775
+
+services:
+  central-sut:
+    build:
+      context: ../..
+      dockerfile: cmd/smsc-gateway/Dockerfile
+    ports:
+      - "2776:2776"
+      - "9092:9090"
+    environment:
+      GW_LISTEN_ADDR: ":2776"
+      GW_SMSC_HOST: downstream-smsc
+      GW_SMSC_PORT: "2775"
+      GW_SMSC_SYSTEM_ID: smppclient
+      GW_SMSC_PASSWORD: password
+      GW_POOL_CONNECTIONS: "8"
+      GW_POOL_WINDOW_SIZE: "200"
+      GW_FORWARD_WORKERS: "128"
+      GW_FORWARD_QUEUE_SIZE: "20000"
+      GW_RETRY_DRAIN_LIMIT: "1000"
+      GW_SUBMIT_RETRY_DRAIN_LIMIT: "1000"
+      GW_DATA_DIR: /data/smscgw
+      GW_SERVER_PASSWORD: password
+      GW_RECONNECT_GRACE_SEC: "30"
+      GW_MAX_SUBMIT_RETRIES: "3"
+      GW_SUBMIT_RETRY_INTERVAL_SEC: "5"
+      GW_ENQUIRE_LINK_SEC: "15"
+      GW_IDLE_TIMEOUT_SEC: "120"
+      GW_DRAIN_TIMEOUT_SEC: "20"
+      GW_RATE_LIMIT_TPS: "0"
+      GW_METRICS_ADDR: ":9090"
+      LOG_LEVEL: info
+    volumes:
+      - perf-sut-data:/data/smscgw
+    depends_on:
+      downstream-smsc:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2776 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20

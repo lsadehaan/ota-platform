@@ -1,0 +1,16 @@
+# Overlay: SMPPSim as downstream SMSC.
+# Usage: docker compose -f compose.base.yml -f compose.smppsim.yml up -d
+services:
+  downstream-smsc:
+    image: eagafonov/smppsim:latest
+    ports:
+      - "2775:2775"
+      - "8884:88"      # SMPPSim admin console (internal port 88)
+    # Default credentials: system_id=smppclient, password=password
+    # Configure via mounted smppsim.props if needed.
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2775 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s

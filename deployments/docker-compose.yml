@@ -9,6 +9,8 @@ services:
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_NUM_PARTITIONS: 3
     healthcheck:
       test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1"]
@@ -49,7 +51,7 @@ services:
 
   scylla:
     image: scylladb/scylla:6.1
-    command: --smp 1 --memory 1G --overprovisioned 1 --api-address 0.0.0.0
+    command: --smp 3 --memory 3G --overprovisioned 1 --api-address 0.0.0.0
     healthcheck:
       test: ["CMD-SHELL", "nodetool status > /dev/null 2>&1"]
       interval: 20s
@@ -96,6 +98,7 @@ services:
       SCYLLA_KEYSPACE: ota_execution
       ALLOWED_ORIGINS: http://localhost:3001,http://10.100.0.1:3001
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      GOMEMLIMIT: "1GiB"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -118,6 +121,7 @@ services:
       DATABASE_URL: postgres://ota:ota_secret@postgres:5432/ota_platform?sslmode=disable
       KAFKA_BROKERS: kafka:9092
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      GOMEMLIMIT: "1GiB"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -139,6 +143,8 @@ services:
       COORDINATION_ADDR: dragonfly:6379
       SCYLLA_HOSTS: scylla
       SCYLLA_KEYSPACE: ota_execution
+      EXECUTOR_MO_RUNNERS: "2"
+      GOMEMLIMIT: "1GiB"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -162,6 +168,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       SCYLLA_HOSTS: scylla
       SCYLLA_KEYSPACE: ota_execution
+      GOMEMLIMIT: "1GiB"
     depends_on:
       kafka-init:
         condition: service_completed_successfully
@@ -179,6 +186,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       SCYLLA_HOSTS: scylla
       SCYLLA_KEYSPACE: ota_execution
+      GOMEMLIMIT: "1GiB"
     depends_on:
       db-migrate:
         condition: service_completed_successfully
@@ -200,12 +208,17 @@ services:
       SMPP_PASSWORD: ota_pass
       SMPP_SOURCE_ADDR: "357"
       COORDINATION_ADDR: dragonfly:6379
+      SCYLLA_HOSTS: scylla
+      SCYLLA_KEYSPACE: ota_execution
+      GOMEMLIMIT: "1GiB"
     depends_on:
       kafka-init:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy
       dragonfly:
+        condition: service_healthy
+      scylla:
         condition: service_healthy
       mock-smsc:
         condition: service_started
@@ -385,7 +398,7 @@ services:
       dockerfile: deployments/toolbox/Dockerfile
     profiles: ["tools"]
     working_dir: /workspace
-    entrypoint: ["sh", "-lc"]
+    entrypoint: ["bash", "-c"]
     command: ["go run ./cmd/seed-card-dataset " ]
     volumes:
       - ..:/workspace
@@ -398,7 +411,7 @@ services:
       dockerfile: deployments/toolbox/Dockerfile
     profiles: ["tools"]
     working_dir: /workspace
-    entrypoint: ["sh", "-lc"]
+    entrypoint: ["bash", "-c"]
     command: ["go run ./cmd/e2e-load-runner " ]
     volumes:
       - ..:/workspace
@@ -411,7 +424,7 @@ services:
       dockerfile: deployments/toolbox/Dockerfile
     profiles: ["tools"]
     working_dir: /workspace
-    entrypoint: ["sh", "-lc"]
+    entrypoint: ["bash", "-c"]
     command: ["go run ./cmd/component-load-runner " ]
     volumes:
       - ..:/workspace

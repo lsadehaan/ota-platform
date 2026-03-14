@@ -1,6 +1,7 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -14,9 +15,77 @@ import (
 	"gorm.io/gorm/clause"
 
 	"ota-platform/internal/db"
-	scyllastore "ota-platform/internal/scylla"
+	"ota-platform/internal/store"
 	"ota-platform/pkg/hexutil"
 )
+
+const cardListCacheTTL = 30 * time.Second
+
+type cachedCampaignStats struct {
+	cards []store.CampaignCardView
+	at    time.Time
+}
+
+// getCachedCampaignStats returns stats and optionally card views.
+// Stats always come from counters (cheap — single row read).
+// Card list is loaded only when loadCards is true (expensive DISTINCT ON scan
+// on append-only table — 3-5s for 500k cards).
+func (a *API) getCachedCampaignStats(ctx context.Context, campaignID string, statusFilter string, loadCards bool) (store.CampaignStats, []store.CampaignCardView, error) {
+	if a.query == nil {
+		return store.CampaignStats{}, nil, nil
+	}
+
+	// Stats from counters — always fresh (cheap read).
+	stats, err := a.query.CampaignStats(ctx, uuid.MustParse(campaignID))
+	if err != nil {
+		return store.CampaignStats{}, nil, err
+	}
+
+	if !loadCards {
+		return stats, nil, nil
+	}
+
+	// Card list from cache (expensive scan).
+	a.statsCacheMu.Lock()
+	if a.statsCache == nil {
+		a.statsCache = make(map[string]cachedCampaignStats)
+	}
+	if cached, ok := a.statsCache[campaignID]; ok && time.Since(cached.at) < cardListCacheTTL {
+		a.statsCacheMu.Unlock()
+		cards := cached.cards
+		if statusFilter != "" {
+			filtered := make([]store.CampaignCardView, 0)
+			for _, c := range cards {
+				if c.Status == statusFilter {
+					filtered = append(filtered, c)
+				}
+			}
+			cards = filtered
+		}
+		return stats, cards, nil
+	}
+	a.statsCacheMu.Unlock()
+
+	cards, err := a.query.ListCampaignCards(ctx, uuid.MustParse(campaignID), "")
+	if err != nil {
+		return store.CampaignStats{}, nil, err
+	}
+
+	a.statsCacheMu.Lock()
+	a.statsCache[campaignID] = cachedCampaignStats{cards: cards, at: time.Now()}
+	a.statsCacheMu.Unlock()
+
+	if statusFilter != "" {
+		filtered := make([]store.CampaignCardView, 0)
+		for _, c := range cards {
+			if c.Status == statusFilter {
+				filtered = append(filtered, c)
+			}
+		}
+		cards = filtered
+	}
+	return stats, cards, nil
+}
 
 var allowedCampaignTypes = map[string]struct{}{
 	"cap_load":       {},
@@ -139,7 +208,7 @@ func (a *API) ListCampaigns(c *gin.Context) {
 		campaignIDs[i] = camp.ID
 	}
 
-	statsMap := make(map[uuid.UUID]scyllastore.CampaignStats)
+	statsMap := make(map[uuid.UUID]store.CampaignStats)
 	if a.query != nil && len(campaignIDs) > 0 {
 		var err error
 		statsMap, err = a.query.CampaignStatsBatch(c.Request.Context(), campaignIDs)
@@ -488,9 +557,11 @@ func (a *API) CreateCampaign(c *gin.Context) {
 	// Reload with associations
 	a.db.Preload("CampaignCommands").First(&campaign, "id = ?", campaign.ID)
 
-	// Start immediately if requested
+	// Start immediately if requested — use a detached context so that
+	// long-running ScyllaDB initialization isn't canceled if the HTTP
+	// client disconnects (500k-card campaigns can take >5 minutes).
 	if req.StartImmediately {
-		if startErr := a.campaign.StartCampaign(c.Request.Context(), campaign.ID); startErr != nil {
+		if startErr := a.campaign.StartCampaign(context.Background(), campaign.ID); startErr != nil {
 			a.logger.Error("campaign created but failed to start immediately", zap.Error(startErr))
 			// Return the campaign anyway; it was created successfully
 			c.JSON(http.StatusCreated, gin.H{
@@ -536,15 +607,15 @@ func (a *API) GetCampaign(c *gin.Context) {
 		return
 	}
 
-	stats := scyllastore.CampaignStats{}
-	if a.query != nil {
-		var err error
-		stats, err = a.query.CampaignStats(c.Request.Context(), uuid.MustParse(id))
-		if err != nil {
-			a.logger.Error("failed to load campaign stats from scylla", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to load campaign stats")
-			return
-		}
+	// Only load the expensive card list when the caller requests pagination or
+	// status filtering. Stats-only polls (e.g. e2e test, dashboard) skip the
+	// DISTINCT ON scan which takes 3-5s on 500k-card campaigns.
+	wantsCards := c.Query("page") != "" || c.Query("status") != ""
+	stats, campaignCards, err := a.getCachedCampaignStats(c.Request.Context(), id, c.Query("status"), wantsCards)
+	if err != nil {
+		a.logger.Error("failed to load campaign stats from scylla", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "failed to load campaign stats")
+		return
 	}
 
 	var progressPct float64
@@ -552,19 +623,8 @@ func (a *API) GetCampaign(c *gin.Context) {
 		progressPct = float64(stats.Completed+stats.Failed+stats.Skipped) / float64(stats.Total) * 100
 	}
 
-	// Paginated cards query from Scylla query tables
 	cardPage, cardPageSize, cardOffset := paginationParams(c)
-	statusFilter := c.Query("status")
-	var campaignCards []scyllastore.CampaignCardView
-	if a.query != nil {
-		var err error
-		campaignCards, err = a.query.ListCampaignCards(c.Request.Context(), uuid.MustParse(id), statusFilter)
-		if err != nil {
-			a.logger.Error("failed to load campaign cards from scylla", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to load campaign cards")
-			return
-		}
-	}
+	_ = cardPage
 	cardTotal := int64(len(campaignCards))
 	cardTotalPages := int(cardTotal) / cardPageSize
 	if int(cardTotal)%cardPageSize != 0 {
@@ -689,6 +749,10 @@ func (a *API) StartCampaign(c *gin.Context) {
 
 	campaignID, _ := uuid.Parse(id)
 	if err := a.campaign.StartCampaign(c.Request.Context(), campaignID); err != nil {
+		if strings.Contains(err.Error(), "shard backlog high") {
+			errorResponse(c, http.StatusConflict, err.Error())
+			return
+		}
 		a.logger.Error("failed to start campaign", zap.Error(err))
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return

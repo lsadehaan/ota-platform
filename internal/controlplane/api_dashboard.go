@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"ota-platform/internal/db"
-	scyllastore "ota-platform/internal/scylla"
+	"ota-platform/internal/store"
 )
 
 // GetDashboardKPIs handles GET /api/v1/dashboard/kpis.
@@ -127,7 +127,7 @@ func (a *API) GetRecentActivity(c *gin.Context) {
 // Returns per-minute average TPS for the last hour (or hourly totals for a specific campaign).
 func (a *API) GetSMSThroughput(c *gin.Context) {
 	var (
-		results []scyllastore.ThroughputPoint
+		results []store.ThroughputPoint
 		err     error
 	)
 	if campaignID := c.Query("campaign_id"); campaignID != "" {
@@ -148,7 +148,7 @@ func (a *API) GetSMSThroughput(c *gin.Context) {
 	}
 
 	if results == nil {
-		results = []scyllastore.ThroughputPoint{}
+		results = []store.ThroughputPoint{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": results})

@@ -1,17 +1,8 @@
-.PHONY: build test lint benchmarks e2e-test e2e-load run-api run-planner run-executor run-projector run-gateway run-reconciler run-smsc run-db-migrate run-kafka-init migrate-up migrate-down docker-up docker-down docker-up-load web-dev web-build
+.PHONY: build test lint benchmarks e2e-test e2e-load run-engine run-smsc run-db-migrate migrate-up migrate-down engine-up engine-down engine-up-load web-dev web-build smscgw-test
 
 build:
-	go build -o bin/ota-api ./cmd/ota-api
-	go build -o bin/campaign-planner ./cmd/campaign-planner
-	go build -o bin/card-executor ./cmd/card-executor
-	go build -o bin/read-model-projector ./cmd/read-model-projector
-	go build -o bin/sms-gateway ./cmd/sms-gateway
-	go build -o bin/reconciler ./cmd/reconciler
+	go build -o bin/ota-engine ./cmd/ota-engine
 	go build -o bin/db-migrate ./cmd/db-migrate
-	go build -o bin/kafka-init ./cmd/kafka-init
-	go build -o bin/benchmark-runner ./cmd/benchmark-runner
-	go build -o bin/component-load-runner ./cmd/component-load-runner
-	go build -o bin/e2e-load-runner ./cmd/e2e-load-runner
 	go build -o bin/mock-smsc ./cmd/mock-smsc
 
 test:
@@ -30,29 +21,11 @@ e2e-test:
 e2e-load:
 	go run ./cmd/e2e-load-runner
 
-run-api:
-	go run ./cmd/ota-api
-
-run-planner:
-	go run ./cmd/campaign-planner
-
-run-executor:
-	go run ./cmd/card-executor
-
-run-projector:
-	go run ./cmd/read-model-projector
-
-run-gateway:
-	go run ./cmd/sms-gateway
-
-run-reconciler:
-	go run ./cmd/reconciler
+run-engine:
+	go run ./cmd/ota-engine
 
 run-db-migrate:
 	go run ./cmd/db-migrate
-
-run-kafka-init:
-	go run ./cmd/kafka-init
 
 run-smsc:
 	go run ./cmd/mock-smsc
@@ -63,14 +36,14 @@ migrate-up:
 migrate-down:
 	migrate -path db/migrations -database "$$DATABASE_URL" down
 
-docker-up:
-	docker compose -f deployments/docker-compose.yml up -d
+engine-up:
+	docker compose -f deployments/docker-compose.engine.yml up -d
 
-docker-down:
-	docker compose -f deployments/docker-compose.yml down
+engine-down:
+	docker compose -f deployments/docker-compose.engine.yml down
 
-docker-up-load:
-	docker compose -f deployments/docker-compose.yml -f deployments/docker-compose.load.yml up -d
+engine-up-load:
+	docker compose -f deployments/docker-compose.engine.yml -f deployments/docker-compose.engine-load.yml up -d
 
 web-dev:
 	cd web && npm run dev
@@ -78,5 +51,5 @@ web-dev:
 web-build:
 	cd web && npm run build
 
-run-component-load:
-	go run ./cmd/component-load-runner
+smscgw-test:
+	./tests/smsc-gateway/run_tests.sh

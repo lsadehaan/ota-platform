@@ -5,7 +5,7 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 
-	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/pipeline"
 	"ota-platform/internal/keystore"
 	redispkg "ota-platform/internal/redis"
 )
@@ -24,11 +24,15 @@ type CoordinationStore interface {
 	CacheCampaignParams(ctx context.Context, campaignID string, params *redispkg.CampaignParams) error
 	GetCampaignCommands(ctx context.Context, campaignID string) ([]redispkg.CampaignCommandCache, error)
 	CacheCampaignCommands(ctx context.Context, campaignID string, cmds []redispkg.CampaignCommandCache) error
+	EvictCardState(cardID string)
 }
 
-// CounterStore abstracts atomic counter operations backed by ScyllaDB.
+// CounterStore abstracts counter operations (process-local cache, zero DB I/O).
 type CounterStore interface {
 	IncrCounter(ctx context.Context, cardID, applicationID string) (int64, error)
+	GetCounter(ctx context.Context, cardID, applicationID string) (int64, error)
+	IncrCounterAsync(ctx context.Context, cardID, applicationID string) error
+	EvictCard(cardID string)
 }
 
 // WSEvent is the websocket payload type shared with the control plane.
@@ -46,13 +50,13 @@ type WSHub interface {
 }
 
 type Producer interface {
-	Publish(ctx context.Context, key string, message interface{}) error
+	Publish(ctx context.Context, key string, message interface{}) (*pipeline.PublishFuture, error)
 	Close() error
 }
 
 // CardStateWriter writes card state changes directly to ScyllaDB.
 type CardStateWriter interface {
-	WriteCardState(ctx context.Context, ev kafkapkg.CardStateChange) error
+	WriteCardState(ctx context.Context, ev pipeline.CardStateChange) (*pipeline.PublishFuture, error)
 }
 
 // Service is the executor service type.

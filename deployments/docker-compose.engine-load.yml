@@ -1,0 +1,20 @@
+services:
+  ota-engine:
+    environment:
+      ENGINE_ACTIVATE_WORKERS: "128"
+      ENGINE_GATEWAY_WORKERS: "64"
+      ENGINE_DLR_WORKERS: "64"
+      ENGINE_MO_WORKERS: "64"
+      ENGINE_CHANNEL_BUFFER: "20000"
+      ENGINE_COUNTER_BLOCK_SIZE: "2000"
+      SMPP_CONNECTIONS: "12"
+      SMPP_WINDOW_SIZE: "200"
+      SMPP_DELIVER_WORKERS: "16"
+      DB_MAX_OPEN_CONNS: "24"
+      DB_MAX_IDLE_CONNS: "12"
+      GOMEMLIMIT: "3GiB"
+
+  mock-smsc:
+    environment:
+      DLR_DELAY_MS: "10"
+      MO_DELAY_MS: "10"

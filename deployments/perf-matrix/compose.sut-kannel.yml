@@ -1,0 +1,13 @@
+# Placeholder SUT overlay for Kannel.
+#
+# This file documents the intended benchmark role only.
+# Kannel needs a concrete SMPP-facing configuration before it can be used as a
+# comparable central SUT in this matrix.
+
+services:
+  central-sut:
+    image: alpine:3.21
+    command: ["sh", "-lc", "echo 'TODO: replace with real Kannel profile' && sleep infinity"]
+    ports:
+      - "2776:2776"
+      - "9092:9090"

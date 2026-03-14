@@ -1,0 +1,46 @@
+# Overlay: Toxiproxy for fault injection.
+# Usage: docker compose -f compose.base.yml -f compose.mocksmsc.yml -f compose.chaos.yml up -d
+#
+# Toxiproxy sits between smsc-gateway and downstream-smsc.
+# The gateway is reconfigured to connect to toxiproxy instead of downstream-smsc directly.
+services:
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    ports:
+      - "8474:8474"     # Toxiproxy API
+      - "2778:2778"     # Proxied SMSC port
+    healthcheck:
+      test: ["CMD", "/toxiproxy-cli", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Toxiproxy init container — creates the proxy after toxiproxy starts.
+  toxiproxy-init:
+    image: curlimages/curl:latest
+    depends_on:
+      toxiproxy:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        n=0; while [ $$n -lt 5 ]; do
+          curl -sf -X POST http://toxiproxy:8474/proxies \
+            -H 'Content-Type: application/json' \
+            -d '{"name":"downstream-smsc","listen":"0.0.0.0:2778","upstream":"downstream-smsc:2775","enabled":true}' && \
+          echo "Toxiproxy proxy created" && exit 0
+          n=$$((n+1)); echo "Attempt $$n failed, retrying in 2s..."
+          sleep 2
+        done
+        echo "Failed to create toxiproxy proxy after 5 attempts"
+        exit 1
+
+  # Override gateway to point at toxiproxy instead of downstream-smsc directly.
+  smsc-gateway:
+    environment:
+      GW_SMSC_HOST: toxiproxy
+      GW_SMSC_PORT: "2778"
+    depends_on:
+      toxiproxy-init:
+        condition: service_completed_successfully

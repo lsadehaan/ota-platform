@@ -1,0 +1,26 @@
+services:
+  loadgen-esme:
+    build:
+      context: ../..
+      dockerfile: cmd/smpp-loadgen/Dockerfile
+    environment:
+      LOADGEN_TARGET_HOST: central-sut
+      LOADGEN_TARGET_PORT: "2776"
+      LOADGEN_SYSTEM_ID: loadgen
+      LOADGEN_PASSWORD: password
+      LOADGEN_SOURCE_ADDR: LOADGEN
+      LOADGEN_BINDS: "8"
+      LOADGEN_WINDOW: "200"
+      LOADGEN_RATE_TPS: "1000"
+      LOADGEN_MESSAGES: "10000"
+      LOADGEN_PAYLOAD_SIZE: "32"
+      LOADGEN_REGISTER_DLR: "true"
+      LOADGEN_SETTLE_TIMEOUT_SEC: "30"
+      LOADGEN_ARTIFACTS_DIR: /artifacts
+      LOADGEN_DELIVER_WORKERS: "16"
+      LOADGEN_DELIVER_QUEUE_SIZE: "10000"
+    volumes:
+      - ./artifacts:/artifacts
+    depends_on:
+      central-sut:
+        condition: service_healthy

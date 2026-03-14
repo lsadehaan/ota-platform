@@ -19,6 +19,7 @@ type executorTelemetry struct {
 	retries            metric.Int64Counter
 	dedupeErrors       metric.Int64Counter
 	processingDuration metric.Float64Histogram
+	opDuration         metric.Float64Histogram
 }
 
 func newExecutorTelemetry(logger *zap.Logger) *executorTelemetry {
@@ -64,6 +65,14 @@ func newExecutorTelemetry(logger *zap.Logger) *executorTelemetry {
 		logger.Warn("create executor processing_duration metric", zap.Error(err))
 	}
 
+	opDuration, err := meter.Float64Histogram(
+		"ota.executor.op_duration_ms",
+		metric.WithDescription("Per-operation duration within executor handlers"),
+	)
+	if err != nil {
+		logger.Warn("create executor op_duration metric", zap.Error(err))
+	}
+
 	return &executorTelemetry{
 		tracer:             otel.Tracer("card-executor"),
 		eventsProcessed:    eventsProcessed,
@@ -71,6 +80,7 @@ func newExecutorTelemetry(logger *zap.Logger) *executorTelemetry {
 		retries:            retries,
 		dedupeErrors:       dedupeErrors,
 		processingDuration: processingDuration,
+		opDuration:         opDuration,
 	}
 }
 
@@ -133,4 +143,16 @@ func (t *executorTelemetry) recordRetry(ctx context.Context, reason string) {
 	if t.retries != nil {
 		t.retries.Add(ctx, 1, metric.WithAttributes(attribute.String("ota.reason", reason)))
 	}
+}
+
+func (t *executorTelemetry) recordOp(ctx context.Context, handler, op string, elapsed time.Duration) {
+	if t == nil || t.opDuration == nil {
+		return
+	}
+	t.opDuration.Record(ctx, float64(elapsed.Microseconds())/1000.0,
+		metric.WithAttributes(
+			attribute.String("handler", handler),
+			attribute.String("op", op),
+		),
+	)
 }

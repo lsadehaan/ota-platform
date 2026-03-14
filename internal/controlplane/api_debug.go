@@ -10,6 +10,7 @@ import (
 	"gorm.io/gorm"
 
 	"ota-platform/internal/db"
+	"ota-platform/internal/store"
 )
 
 func (a *API) GetDebugCard(c *gin.Context) {
@@ -29,10 +30,15 @@ func (a *API) GetDebugCard(c *gin.Context) {
 		return
 	}
 
-	var counters []db.CardCounter
-	if err := a.db.Where("card_id = ?", cardID).Find(&counters).Error; err != nil {
-		errorResponse(c, http.StatusInternalServerError, "failed to load card counters")
-		return
+	var counters []store.CardCounterRecord
+	if a.counterRead != nil {
+		var err error
+		counters, err = a.counterRead.GetCountersByCard(c.Request.Context(), cardID.String())
+		if err != nil {
+			a.logger.Error("failed to load card counters from ScyllaDB", zap.Error(err))
+			errorResponse(c, http.StatusInternalServerError, "failed to load card counters")
+			return
+		}
 	}
 
 	state, err := a.query.GetCardState(c.Request.Context(), cardID)
@@ -212,7 +218,11 @@ func (a *API) GetDebugQueues(c *gin.Context) {
 			"updated_at":  campaign.UpdatedAt,
 		})
 	}
-	c.JSON(http.StatusOK, gin.H{"campaigns": response})
+	result := gin.H{"campaigns": response}
+	if a.channelStats != nil {
+		result["channel_depths"] = a.channelStats.ChannelDepths()
+	}
+	c.JSON(http.StatusOK, result)
 }
 
 func (a *API) GetDebugStuck(c *gin.Context) {

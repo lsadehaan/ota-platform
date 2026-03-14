@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"ota-platform/internal/db"
-	scyllastore "ota-platform/internal/scylla"
+	"ota-platform/internal/store"
 	"ota-platform/pkg/hexutil"
 )
 
@@ -154,7 +154,9 @@ func (a *API) CreateCard(c *gin.Context) {
 		card.Status = req.Status
 	}
 
-	if err := a.db.Create(&card).Error; err != nil {
+	tx := a.db.Begin()
+	if err := tx.Create(&card).Error; err != nil {
+		tx.Rollback()
 		if isUniqueConstraintError(err) {
 			errorResponse(c, http.StatusConflict, "a card with this ICCID, IMSI, or MSISDN already exists")
 			return
@@ -166,8 +168,17 @@ func (a *API) CreateCard(c *gin.Context) {
 
 	if a.cardKeys != nil {
 		if err := a.cardKeys.WriteCardKeys(c.Request.Context(), card.ID.String(), card.EncKey, card.AuthKey, card.KEK, card.ProfileID.String(), card.MSISDN); err != nil {
-			a.logger.Warn("failed to write card keys to ScyllaDB", zap.Error(err))
+			tx.Rollback()
+			a.logger.Error("ScyllaDB key sync failed, rolling back Postgres card creation", zap.String("card_id", card.ID.String()), zap.Error(err))
+			errorResponse(c, http.StatusInternalServerError, "card creation failed — key sync error")
+			return
 		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		a.logger.Error("failed to commit card creation", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "failed to create card")
+		return
 	}
 
 	c.JSON(http.StatusCreated, gin.H{"data": card})
@@ -192,9 +203,15 @@ func (a *API) GetCard(c *gin.Context) {
 	}
 
 	// Load counters from ScyllaDB.
-	var counters []scyllastore.CardCounterRecord
+	var counters []store.CardCounterRecord
+	countersDegraded := false
 	if a.counterRead != nil {
-		counters, _ = a.counterRead.GetCountersByCard(c.Request.Context(), id)
+		var err error
+		counters, err = a.counterRead.GetCountersByCard(c.Request.Context(), id)
+		if err != nil {
+			countersDegraded = true
+			a.logger.Warn("failed to load card counters from ScyllaDB", zap.String("card_id", id), zap.Error(err))
+		}
 	}
 
 	// Load recent messages (last 10)
@@ -205,11 +222,15 @@ func (a *API) GetCard(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	resp := gin.H{
 		"data":            card,
 		"counters":        counters,
 		"recent_messages": recentMessages,
-	})
+	}
+	if countersDegraded {
+		resp["counters_degraded"] = true
+	}
+	c.JSON(http.StatusOK, resp)
 }
 
 // UpdateCard handles PUT /api/v1/cards/:id.
@@ -288,20 +309,30 @@ func (a *API) UpdateCard(c *gin.Context) {
 		return
 	}
 
-	if err := a.db.Model(&card).Updates(updates).Error; err != nil {
+	tx := a.db.Begin()
+	if err := tx.Model(&card).Updates(updates).Error; err != nil {
+		tx.Rollback()
 		a.logger.Error("failed to update card", zap.Error(err))
 		errorResponse(c, http.StatusInternalServerError, "failed to update card")
 		return
 	}
 
-	if a.cardKeys != nil {
-		a.db.First(&card, "id = ?", id)
-		if err := a.cardKeys.WriteCardKeys(c.Request.Context(), card.ID.String(), card.EncKey, card.AuthKey, card.KEK, card.ProfileID.String(), card.MSISDN); err != nil {
-			a.logger.Warn("failed to update card keys in ScyllaDB", zap.Error(err))
-		}
+	// Reload card within transaction to get updated fields.
+	if err := tx.First(&card, "id = ?", id).Error; err != nil {
+		tx.Rollback()
+		a.logger.Error("failed to reload card after update", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "failed to update card")
+		return
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		a.logger.Error("failed to commit card update", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "failed to update card")
+		return
 	}
 
 	a.db.Preload("Profile").First(&card, "id = ?", id)
+
 	c.JSON(http.StatusOK, gin.H{"data": card})
 }
 
@@ -470,15 +501,18 @@ func (a *API) ImportCards(c *gin.Context) {
 		skipped += int(result.Skipped)
 
 		// Write card keys to ScyllaDB for inserted cards.
+		// Re-import is safe: Postgres uses ON CONFLICT DO NOTHING, ScyllaDB INSERT
+		// is idempotent (CQL upsert). card_by_msisdn reverse mappings are also safe
+		// because import creates new inventory — it does not mutate existing MSISDNs.
 		if a.cardKeys != nil && len(result.InsertedIDs) > 0 {
 			insertedSet := make(map[uuid.UUID]struct{}, len(result.InsertedIDs))
 			for _, id := range result.InsertedIDs {
 				insertedSet[id] = struct{}{}
 			}
-			var records []scyllastore.CardKeyRecord
+			var records []store.CardKeyRecord
 			for i := range batch {
 				if _, ok := insertedSet[batch[i].ID]; ok {
-					records = append(records, scyllastore.CardKeyRecord{
+					records = append(records, store.CardKeyRecord{
 						CardID:    batch[i].ID.String(),
 						EncKey:    batch[i].EncKey,
 						AuthKey:   batch[i].AuthKey,
@@ -489,7 +523,12 @@ func (a *API) ImportCards(c *gin.Context) {
 				}
 			}
 			if err := a.cardKeys.WriteCardKeysBatch(c.Request.Context(), records); err != nil {
-				a.logger.Warn("failed to write card keys to ScyllaDB", zap.Error(err))
+				a.logger.Error("card batch inserted in Postgres but ScyllaDB key sync failed — rerun import to sync keys (Postgres ON CONFLICT DO NOTHING + CQL upsert make re-import safe)",
+					zap.Int("count", len(records)), zap.Error(err))
+				if a.importKeySyncFailures != nil {
+					a.importKeySyncFailures.Add(c.Request.Context(), 1)
+				}
+				return fmt.Errorf("ScyllaDB key sync failed for %d cards — rerun import to repair: %w", len(records), err)
 			}
 		}
 
