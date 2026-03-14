@@ -1,0 +1,81 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "Connections and Transactions",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [
+        {"expr": "pg_stat_database_numbackends{datname=\"ota_platform\"}", "legendFormat": "connections"},
+        {"expr": "rate(pg_stat_database_xact_commit{datname=\"ota_platform\"}[1m])", "legendFormat": "commits/sec"},
+        {"expr": "rate(pg_stat_database_xact_rollback{datname=\"ota_platform\"}[1m])", "legendFormat": "rollbacks/sec"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Buffer Activity",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [
+        {"expr": "rate(pg_stat_database_blks_hit{datname=\"ota_platform\"}[1m])", "legendFormat": "buffer hits/sec"},
+        {"expr": "rate(pg_stat_database_blks_read{datname=\"ota_platform\"}[1m])", "legendFormat": "disk reads/sec"}
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Cache Hit Ratio",
+      "gridPos": {"h": 4, "w": 6, "x": 0, "y": 8},
+      "targets": [
+        {"expr": "100 * pg_stat_database_blks_hit{datname=\"ota_platform\"} / clamp_min(pg_stat_database_blks_hit{datname=\"ota_platform\"} + pg_stat_database_blks_read{datname=\"ota_platform\"}, 1)", "legendFormat": "hit %"}
+      ],
+      "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}, "orientation": "auto", "textMode": "auto"}
+    },
+    {
+      "type": "timeseries",
+      "title": "Tuple Activity",
+      "gridPos": {"h": 8, "w": 18, "x": 6, "y": 8},
+      "targets": [
+        {"expr": "rate(pg_stat_database_tup_returned{datname=\"ota_platform\"}[1m])", "legendFormat": "returned/sec"},
+        {"expr": "rate(pg_stat_database_tup_fetched{datname=\"ota_platform\"}[1m])", "legendFormat": "fetched/sec"},
+        {"expr": "rate(pg_stat_database_tup_inserted{datname=\"ota_platform\"}[1m])", "legendFormat": "inserted/sec"},
+        {"expr": "rate(pg_stat_database_tup_updated{datname=\"ota_platform\"}[1m])", "legendFormat": "updated/sec"},
+        {"expr": "rate(pg_stat_database_tup_deleted{datname=\"ota_platform\"}[1m])", "legendFormat": "deleted/sec"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Temp and Deadlocks",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "targets": [
+        {"expr": "rate(pg_stat_database_temp_files{datname=\"ota_platform\"}[1m])", "legendFormat": "temp files/sec"},
+        {"expr": "rate(pg_stat_database_temp_bytes{datname=\"ota_platform\"}[1m])", "legendFormat": "temp bytes/sec"},
+        {"expr": "rate(pg_stat_database_deadlocks{datname=\"ota_platform\"}[5m])", "legendFormat": "deadlocks/sec"}
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "pg_stat_statements Top Queries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "targets": [
+        {"expr": "topk(10, pg_stat_statements_top_total_exec_time)", "legendFormat": "query {{queryid}} total ms"},
+        {"expr": "topk(10, pg_stat_statements_top_mean_exec_time)", "legendFormat": "query {{queryid}} mean ms"}
+      ]
+    }
+  ],
+  "refresh": "5s",
+  "schemaVersion": 39,
+  "style": "dark",
+  "tags": ["ota", "postgres"],
+  "templating": {"list": []},
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "OTA PostgreSQL",
+  "uid": "ota-postgres",
+  "version": 1,
+  "weekStart": ""
+}

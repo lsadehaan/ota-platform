@@ -1,0 +1,20 @@
+# Placeholder SUT overlay for Jasmin.
+#
+# The intent is to expose Jasmin as the central SMPP-facing system under test,
+# with the same northbound contract as the in-repo gateway:
+#
+#   loadgen-esme -> central-sut:2776 -> downstream-smsc:2775
+#
+# This file is intentionally not runnable yet because Jasmin needs:
+# - a chosen image
+# - provisioned config files
+# - explicit SMPP server user setup
+# - explicit SMPP client connector setup toward downstream-smsc
+
+services:
+  central-sut:
+    image: alpine:3.21
+    command: ["sh", "-lc", "echo 'TODO: replace with real Jasmin profile' && sleep infinity"]
+    ports:
+      - "2776:2776"
+      - "9092:9090"

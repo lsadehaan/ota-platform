@@ -1,5 +1,7 @@
 package gsm0348
 
+import "context"
+
 // CertificationMode defines the cryptographic checksum mode used in SPI1.
 type CertificationMode byte
 
@@ -77,14 +79,27 @@ type SecurityProfile struct {
 	SecurityBytesWithLengthsAndUDHL bool
 }
 
+// CryptoProvider performs MAC and encryption without exposing raw key material.
+type CryptoProvider interface {
+	ComputeMAC(ctx context.Context, cardID string, algo, mode string, data []byte) ([]byte, error)
+	Encrypt(ctx context.Context, cardID string, algo, mode string, data []byte) ([]byte, error)
+}
+
 // CommandPacketInput provides all variable data needed to build a single
 // GSM 03.48 command packet.
 type CommandPacketInput struct {
 	TAR          [3]byte
 	Counter      [5]byte
-	CipheringKey []byte
-	SigningKey    []byte
+	CipheringKey []byte // Used when CryptoProvider is nil
+	SigningKey    []byte // Used when CryptoProvider is nil
 	UserData     []byte
+
+	// CryptoProvider, when set, is used for MAC and encryption operations
+	// instead of the raw CipheringKey/SigningKey fields above.
+	CryptoProvider CryptoProvider
+	// CardID is required when CryptoProvider is set, to identify which
+	// card's keys to use for the crypto operations.
+	CardID string
 }
 
 // ResponsePacket holds the parsed fields of a GSM 03.48 response packet.

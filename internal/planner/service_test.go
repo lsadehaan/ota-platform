@@ -12,20 +12,20 @@ import (
 	"gorm.io/gorm/logger"
 
 	"ota-platform/internal/db"
-	kafkapkg "ota-platform/internal/kafka"
+	"ota-platform/internal/pipeline"
 )
 
 type plannerTestPublisher struct {
-	events []kafkapkg.CardEvent
+	events []pipeline.CardEvent
 }
 
-func (p *plannerTestPublisher) Publish(_ context.Context, _ string, message interface{}) error {
-	event, ok := message.(kafkapkg.CardEvent)
+func (p *plannerTestPublisher) Publish(_ context.Context, _ string, message interface{}) (*pipeline.PublishFuture, error) {
+	event, ok := message.(pipeline.CardEvent)
 	if !ok {
-		return nil
+		return pipeline.ResolvedFuture(nil), nil
 	}
 	p.events = append(p.events, event)
-	return nil
+	return pipeline.ResolvedFuture(nil), nil
 }
 
 func TestPublishClaimedShardsPublishesAndMarksShardPublished(t *testing.T) {
@@ -71,7 +71,7 @@ func TestPublishClaimedShardsPublishesAndMarksShardPublished(t *testing.T) {
 		t.Fatalf("create campaign: %v", err)
 	}
 
-	items, err := json.Marshal([]kafkapkg.CardEvent{
+	items, err := json.Marshal([]pipeline.CardEvent{
 		{Type: "card.activate", EventID: uuid.New().String(), CardID: uuid.New().String(), CampaignID: campaignID.String(), Step: 1},
 		{Type: "card.activate", EventID: uuid.New().String(), CardID: uuid.New().String(), CampaignID: campaignID.String(), Step: 1},
 	})
@@ -88,7 +88,7 @@ func TestPublishClaimedShardsPublishesAndMarksShardPublished(t *testing.T) {
 	}
 
 	pub := &plannerTestPublisher{}
-	svc := NewService(database, pub, zap.NewNop())
+	svc := NewService(database, pub, nil, zap.NewNop())
 	svc.publishClaimedShards(context.Background(), []db.CampaignShard{{
 		ID:         shardID,
 		CampaignID: campaignID,

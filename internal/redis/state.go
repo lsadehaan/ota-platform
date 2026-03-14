@@ -2,8 +2,6 @@ package redis
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -17,37 +15,27 @@ import (
 	"go.uber.org/zap"
 )
 
-func encryptData(plaintext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
+func (c *Client) encryptData(plaintext []byte) ([]byte, error) {
+	if c.aead == nil {
+		return plaintext, nil
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonce := make([]byte, gcm.NonceSize())
+	nonce := make([]byte, c.aead.NonceSize())
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return nil, err
 	}
-	return gcm.Seal(nonce, nonce, plaintext, nil), nil
+	return c.aead.Seal(nonce, nonce, plaintext, nil), nil
 }
 
-func decryptData(ciphertext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
+func (c *Client) decryptData(ciphertext []byte) ([]byte, error) {
+	if c.aead == nil {
+		return ciphertext, nil
 	}
-	gcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	nonceSize := gcm.NonceSize()
+	nonceSize := c.aead.NonceSize()
 	if len(ciphertext) < nonceSize {
 		return nil, fmt.Errorf("ciphertext too short")
 	}
 	nonce, ciphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
-	return gcm.Open(nil, nonce, ciphertext, nil)
+	return c.aead.Open(nil, nonce, ciphertext, nil)
 }
 
 // ---------------------------------------------------------------------------
@@ -56,16 +44,17 @@ func decryptData(ciphertext, key []byte) ([]byte, error) {
 
 // CardState represents the current processing state of a card within a campaign.
 type CardState struct {
-	CampaignID  string `json:"campaign_id"`
-	CurrentStep int    `json:"current_step"`
-	Status      string `json:"status"` // pending, sending, awaiting_dlr, awaiting_mo, completed, failed
-	RetryCount  int    `json:"retry_count"`
-	LastMsgID   string `json:"last_msg_id"`
-	LastEventID string `json:"last_event_id"`
+	CampaignID    string `json:"campaign_id"`
+	CurrentStep   int    `json:"current_step"`
+	Status        string `json:"status"` // pending, sending, awaiting_dlr, awaiting_mo, completed, failed
+	RetryCount    int    `json:"retry_count"`
+	LastMsgID     string `json:"last_msg_id"`
+	LastEventID   string `json:"last_event_id"`
+	TransitionSeq int64  `json:"transition_seq"` // monotonic per card_id, for idempotent projections
 }
 
 func cardStateKey(cardID string) string {
-	return fmt.Sprintf("card:%s:state", cardID)
+	return "card:" + cardID + ":state"
 }
 
 // GetCardState retrieves the card state hash from Redis.
@@ -83,14 +72,16 @@ func (c *Client) GetCardState(ctx context.Context, cardID string) (*CardState, e
 
 	currentStep, _ := strconv.Atoi(result["current_step"])
 	retryCount, _ := strconv.Atoi(result["retry_count"])
+	transitionSeq, _ := strconv.ParseInt(result["transition_seq"], 10, 64)
 
 	return &CardState{
-		CampaignID:  result["campaign_id"],
-		CurrentStep: currentStep,
-		Status:      result["status"],
-		RetryCount:  retryCount,
-		LastMsgID:   result["last_msg_id"],
-		LastEventID: result["last_event_id"],
+		CampaignID:    result["campaign_id"],
+		CurrentStep:   currentStep,
+		Status:        result["status"],
+		RetryCount:    retryCount,
+		LastMsgID:     result["last_msg_id"],
+		LastEventID:   result["last_event_id"],
+		TransitionSeq: transitionSeq,
 	}, nil
 }
 
@@ -98,12 +89,13 @@ func (c *Client) GetCardState(ctx context.Context, cardID string) (*CardState, e
 func (c *Client) SetCardState(ctx context.Context, cardID string, state *CardState) error {
 	key := cardStateKey(cardID)
 	fields := map[string]interface{}{
-		"campaign_id":   state.CampaignID,
-		"current_step":  state.CurrentStep,
-		"status":        state.Status,
-		"retry_count":   state.RetryCount,
-		"last_msg_id":   state.LastMsgID,
-		"last_event_id": state.LastEventID,
+		"campaign_id":    state.CampaignID,
+		"current_step":   state.CurrentStep,
+		"status":         state.Status,
+		"retry_count":    state.RetryCount,
+		"last_msg_id":    state.LastMsgID,
+		"last_event_id":  state.LastEventID,
+		"transition_seq": state.TransitionSeq,
 	}
 
 	pipe := c.rdb.Pipeline()
@@ -126,119 +118,6 @@ func (c *Client) DeleteCardState(ctx context.Context, cardID string) error {
 		return err
 	}
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Card Keys Cache
-// ---------------------------------------------------------------------------
-
-// CardKeys holds the cryptographic keys and metadata for a SIM card.
-type CardKeys struct {
-	EncKey    []byte `json:"enc_key"`
-	AuthKey   []byte `json:"auth_key"`
-	KEK       []byte `json:"kek,omitempty"`
-	ProfileID string `json:"profile_id"`
-	MSISDN    string `json:"msisdn"`
-}
-
-// cardKeysJSON is the serialization form that stores byte fields as hex strings.
-type cardKeysJSON struct {
-	EncKey    string `json:"enc_key"`
-	AuthKey   string `json:"auth_key"`
-	KEK       string `json:"kek,omitempty"`
-	ProfileID string `json:"profile_id"`
-	MSISDN    string `json:"msisdn"`
-}
-
-func cardKeysKey(cardID string) string {
-	return fmt.Sprintf("card:%s:keys", cardID)
-}
-
-// CacheCardKeys stores the card keys as a JSON string with a 1-hour TTL.
-// Byte fields are hex-encoded before storage.
-func (c *Client) CacheCardKeys(ctx context.Context, cardID string, keys *CardKeys) error {
-	j := cardKeysJSON{
-		EncKey:    hex.EncodeToString(keys.EncKey),
-		AuthKey:   hex.EncodeToString(keys.AuthKey),
-		KEK:       hex.EncodeToString(keys.KEK),
-		ProfileID: keys.ProfileID,
-		MSISDN:    keys.MSISDN,
-	}
-	data, err := json.Marshal(j)
-	if err != nil {
-		return fmt.Errorf("marshal card keys: %w", err)
-	}
-
-	if c.encryptionKey != nil {
-		data, err = encryptData(data, c.encryptionKey)
-		if err != nil {
-			return fmt.Errorf("encrypt card keys: %w", err)
-		}
-	}
-
-	key := cardKeysKey(cardID)
-	if err := c.rdb.Set(ctx, key, data, 1*time.Hour).Err(); err != nil {
-		c.logger.Warn("redis: failed to cache card keys", zap.String("card_id", cardID), zap.Error(err))
-		return err
-	}
-
-	// Also store the MSISDN→card_id mapping for MO correlation.
-	if keys.MSISDN != "" {
-		if err := c.StoreMSISDNMapping(ctx, keys.MSISDN, cardID); err != nil {
-			c.logger.Warn("redis: failed to store MSISDN mapping", zap.String("card_id", cardID), zap.String("msisdn", keys.MSISDN), zap.Error(err))
-		}
-	}
-
-	return nil
-}
-
-// GetCardKeys retrieves cached card keys. Returns (nil, nil) on cache miss.
-func (c *Client) GetCardKeys(ctx context.Context, cardID string) (*CardKeys, error) {
-	key := cardKeysKey(cardID)
-	data, err := c.rdb.Get(ctx, key).Bytes()
-	if err != nil {
-		if errors.Is(err, redis.Nil) {
-			return nil, nil
-		}
-		c.logger.Warn("redis: failed to get card keys", zap.String("card_id", cardID), zap.Error(err))
-		return nil, err
-	}
-
-	if c.encryptionKey != nil {
-		data, err = decryptData(data, c.encryptionKey)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt card keys: %w", err)
-		}
-	}
-
-	var j cardKeysJSON
-	if err := json.Unmarshal(data, &j); err != nil {
-		return nil, fmt.Errorf("unmarshal card keys: %w", err)
-	}
-
-	encKey, err := hex.DecodeString(j.EncKey)
-	if err != nil {
-		return nil, fmt.Errorf("decode enc_key hex: %w", err)
-	}
-	authKey, err := hex.DecodeString(j.AuthKey)
-	if err != nil {
-		return nil, fmt.Errorf("decode auth_key hex: %w", err)
-	}
-	var kek []byte
-	if j.KEK != "" {
-		kek, err = hex.DecodeString(j.KEK)
-		if err != nil {
-			return nil, fmt.Errorf("decode kek hex: %w", err)
-		}
-	}
-
-	return &CardKeys{
-		EncKey:    encKey,
-		AuthKey:   authKey,
-		KEK:       kek,
-		ProfileID: j.ProfileID,
-		MSISDN:    j.MSISDN,
-	}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -291,7 +170,7 @@ type campaignCommandJSON struct {
 }
 
 func campaignCommandsKey(campaignID string) string {
-	return fmt.Sprintf("campaign:%s:commands", campaignID)
+	return "campaign:" + campaignID + ":commands"
 }
 
 // CacheCampaignCommands stores the campaign commands as a JSON array with a 12-hour TTL.
@@ -385,24 +264,11 @@ func (c *Client) GetCampaignCommands(ctx context.Context, campaignID string) ([]
 }
 
 // ---------------------------------------------------------------------------
-// Campaign Status + Progress
+// Campaign Status
 // ---------------------------------------------------------------------------
 
-// CampaignProgress holds the per-status card counts for a campaign.
-type CampaignProgress struct {
-	Pending    int64 `json:"pending"`
-	InProgress int64 `json:"in_progress"`
-	Completed  int64 `json:"completed"`
-	Failed     int64 `json:"failed"`
-	Skipped    int64 `json:"skipped"`
-}
-
 func campaignStatusKey(campaignID string) string {
-	return fmt.Sprintf("campaign:%s:status", campaignID)
-}
-
-func campaignProgressKey(campaignID string) string {
-	return fmt.Sprintf("campaign:%s:progress", campaignID)
+	return "campaign:" + campaignID + ":status"
 }
 
 // SetCampaignStatus stores the campaign status string with a 24-hour TTL.
@@ -429,120 +295,17 @@ func (c *Client) GetCampaignStatus(ctx context.Context, campaignID string) (stri
 	return status, nil
 }
 
-// InitProgress initializes the campaign progress hash with the given total card count.
-func (c *Client) InitProgress(ctx context.Context, campaignID string, totalCards int64) error {
-	key := campaignProgressKey(campaignID)
-	fields := map[string]interface{}{
-		"pending":     totalCards,
-		"in_progress": 0,
-		"completed":   0,
-		"failed":      0,
-		"skipped":     0,
-	}
-
-	pipe := c.rdb.Pipeline()
-	pipe.HSet(ctx, key, fields)
-	pipe.Expire(ctx, key, 24*time.Hour)
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		c.logger.Warn("redis: failed to init progress", zap.String("campaign_id", campaignID), zap.Error(err))
-		return err
-	}
-	return nil
-}
-
-// UpdateProgress atomically decrements fromStatus and increments toStatus, then
-// returns the updated progress snapshot.
-func (c *Client) UpdateProgress(ctx context.Context, campaignID, fromStatus, toStatus string) (*CampaignProgress, error) {
-	key := campaignProgressKey(campaignID)
-
-	pipe := c.rdb.Pipeline()
-	pipe.HIncrBy(ctx, key, fromStatus, -1)
-	pipe.HIncrBy(ctx, key, toStatus, 1)
-	getAllCmd := pipe.HGetAll(ctx, key)
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		c.logger.Warn("redis: failed to update progress",
-			zap.String("campaign_id", campaignID),
-			zap.String("from", fromStatus),
-			zap.String("to", toStatus),
-			zap.Error(err),
-		)
-		return nil, err
-	}
-
-	return parseProgress(getAllCmd.Val()), nil
-}
-
-// GetProgress retrieves the current campaign progress. Returns (nil, nil) if not found.
-func (c *Client) GetProgress(ctx context.Context, campaignID string) (*CampaignProgress, error) {
-	key := campaignProgressKey(campaignID)
-	result, err := c.rdb.HGetAll(ctx, key).Result()
-	if err != nil {
-		c.logger.Warn("redis: failed to get progress", zap.String("campaign_id", campaignID), zap.Error(err))
-		return nil, err
-	}
-	if len(result) == 0 {
-		return nil, nil
-	}
-	return parseProgress(result), nil
-}
-
-func parseProgress(m map[string]string) *CampaignProgress {
-	p := &CampaignProgress{}
-	p.Pending, _ = strconv.ParseInt(m["pending"], 10, 64)
-	p.InProgress, _ = strconv.ParseInt(m["in_progress"], 10, 64)
-	p.Completed, _ = strconv.ParseInt(m["completed"], 10, 64)
-	p.Failed, _ = strconv.ParseInt(m["failed"], 10, 64)
-	p.Skipped, _ = strconv.ParseInt(m["skipped"], 10, 64)
-	return p
-}
-
-// ---------------------------------------------------------------------------
-// Counter (Atomic)
-// ---------------------------------------------------------------------------
-
-// IncrCounter atomically increments the counter for a given card and application.
-// Counters are permanent and monotonic (no TTL).
-func (c *Client) IncrCounter(ctx context.Context, cardID, appID string) (int64, error) {
-	key := fmt.Sprintf("counter:%s:%s", cardID, appID)
-	val, err := c.rdb.Incr(ctx, key).Result()
-	if err != nil {
-		c.logger.Warn("redis: failed to increment counter",
-			zap.String("card_id", cardID),
-			zap.String("app_id", appID),
-			zap.Error(err),
-		)
-		return 0, err
-	}
-	return val, nil
-}
-
-// ---------------------------------------------------------------------------
-// MSISDN → Card Mapping
-// ---------------------------------------------------------------------------
-
-// StoreMSISDNMapping stores a persistent MSISDN→card_id mapping with a 24-hour TTL.
-// This is set when card keys are cached, since the MSISDN is known at that point.
-func (c *Client) StoreMSISDNMapping(ctx context.Context, msisdn, cardID string) error {
-	key := fmt.Sprintf("msisdn:%s", msisdn)
-	return c.rdb.Set(ctx, key, cardID, 24*time.Hour).Err()
-}
-
-// LookupCardByMSISDN resolves a card_id from an MSISDN using the persistent mapping.
-func (c *Client) LookupCardByMSISDN(ctx context.Context, msisdn string) (string, error) {
-	key := fmt.Sprintf("msisdn:%s", msisdn)
-	return c.rdb.Get(ctx, key).Result()
-}
-
 // ---------------------------------------------------------------------------
 // Multipart SMS DLR Tracking
 // ---------------------------------------------------------------------------
 
+// ErrNoMultipartTracking is returned by RecordPartDLR when the message
+// has no multipart tracking initialised (i.e. it is a single-part message).
+var ErrNoMultipartTracking = errors.New("no multipart tracking")
+
 // InitMultipartTracking initializes tracking for a multipart SMS message.
 func (c *Client) InitMultipartTracking(ctx context.Context, msgID string, totalParts int) error {
-	key := fmt.Sprintf("multipart:%s", msgID)
+	key := "multipart:" + msgID
 	pipe := c.rdb.Pipeline()
 	pipe.HSet(ctx, key, "total", totalParts, "delivered", 0, "failed", 0)
 	pipe.Expire(ctx, key, 10*time.Minute)
@@ -550,37 +313,46 @@ func (c *Client) InitMultipartTracking(ctx context.Context, msgID string, totalP
 	return err
 }
 
-// RecordPartDLR records a DLR for one part of a multipart SMS and returns
-// whether all parts have been resolved and whether any part failed.
+// recordPartDLRScript atomically increments the DLR field and returns the
+// current state in a single Redis round-trip, eliminating the race condition
+// where two concurrent DLRs could both observe allResolved=true.
+var recordPartDLRScript = redis.NewScript(`
+local exists = redis.call('EXISTS', KEYS[1])
+if exists == 0 then
+    return {0, 0, 0, 0}
+end
+redis.call('HINCRBY', KEYS[1], ARGV[1], 1)
+local total = tonumber(redis.call('HGET', KEYS[1], 'total')) or 0
+local delivered = tonumber(redis.call('HGET', KEYS[1], 'delivered')) or 0
+local failed = tonumber(redis.call('HGET', KEYS[1], 'failed')) or 0
+return {1, total, delivered, failed}
+`)
+
+// RecordPartDLR atomically records a DLR for one part of a multipart SMS
+// and returns whether all parts have been resolved and whether any part failed.
 func (c *Client) RecordPartDLR(ctx context.Context, msgID string, delivered bool) (allResolved bool, anyFailed bool, err error) {
-	key := fmt.Sprintf("multipart:%s", msgID)
-
-	// Check if multipart tracking exists first.
-	exists, err := c.rdb.Exists(ctx, key).Result()
-	if err != nil {
-		return false, false, err
-	}
-	if exists == 0 {
-		return false, false, fmt.Errorf("no multipart tracking for msg %s", msgID)
-	}
-
+	key := "multipart:" + msgID
 	field := "delivered"
 	if !delivered {
 		field = "failed"
 	}
-	if _, err := c.rdb.HIncrBy(ctx, key, field, 1).Result(); err != nil {
-		return false, false, err
-	}
-	vals, err := c.rdb.HGetAll(ctx, key).Result()
+
+	result, err := recordPartDLRScript.Run(ctx, c.rdb, []string{key}, field).Int64Slice()
 	if err != nil {
-		return false, false, err
+		return false, false, fmt.Errorf("record part DLR lua: %w", err)
 	}
-	total, _ := strconv.ParseInt(vals["total"], 10, 64)
+	if len(result) < 4 {
+		return false, false, fmt.Errorf("unexpected lua result length: %d", len(result))
+	}
+	if result[0] == 0 {
+		return false, false, ErrNoMultipartTracking
+	}
+	total := result[1]
 	if total <= 0 {
 		return false, false, fmt.Errorf("multipart tracking for msg %s has invalid total: %d", msgID, total)
 	}
-	del, _ := strconv.ParseInt(vals["delivered"], 10, 64)
-	fail, _ := strconv.ParseInt(vals["failed"], 10, 64)
+	del := result[2]
+	fail := result[3]
 	allResolved = (del + fail) >= total
 	anyFailed = fail > 0
 	return allResolved, anyFailed, nil
@@ -600,7 +372,7 @@ type SMPPMapping struct {
 }
 
 func smppKey(smppMsgID string) string {
-	return fmt.Sprintf("smpp:%s", smppMsgID)
+	return "smpp:" + smppMsgID
 }
 
 // StoreSMPPCorrelation stores an SMPP correlation mapping with a 5-minute TTL.
@@ -658,7 +430,7 @@ func (c *Client) LoadSMPPCorrelation(ctx context.Context, smppMsgID string) (*SM
 // Returns true if the key was newly set (event is NOT a duplicate).
 // Returns false if the key already existed (event IS a duplicate).
 func (c *Client) CheckAndSetDedupe(ctx context.Context, eventID string) (bool, error) {
-	key := fmt.Sprintf("dedupe:%s", eventID)
+	key := "dedupe:" + eventID
 	ok, err := c.rdb.SetNX(ctx, key, 1, 10*time.Minute).Result()
 	if err != nil {
 		c.logger.Warn("redis: failed to check dedupe", zap.String("event_id", eventID), zap.Error(err))
@@ -676,7 +448,7 @@ func (c *Client) CheckAndSetDedupe(ctx context.Context, eventID string) (bool, e
 // ---------------------------------------------------------------------------
 
 func profileCacheKey(profileID string) string {
-	return fmt.Sprintf("profile:%s", profileID)
+	return "profile:" + profileID
 }
 
 // CacheProfile stores a profile as JSON with a 1-hour TTL.
@@ -714,7 +486,7 @@ type CampaignParams struct {
 }
 
 func campaignParamsKey(campaignID string) string {
-	return fmt.Sprintf("campaign_params:%s", campaignID)
+	return "campaign_params:" + campaignID
 }
 
 // CacheCampaignParams stores campaign parameters with a 1-hour TTL.
@@ -749,7 +521,7 @@ func (c *Client) GetCachedCampaignParams(ctx context.Context, campaignID string)
 // Returns true if the request is allowed, false if the rate is exceeded.
 func (c *Client) AcquireThrottle(ctx context.Context, campaignID string, ratePerSec int) (bool, error) {
 	now := time.Now().Unix()
-	key := fmt.Sprintf("throttle:%s:%d", campaignID, now)
+	key := "throttle:" + campaignID + ":" + strconv.FormatInt(now, 10)
 
 	pipe := c.rdb.Pipeline()
 	incrCmd := pipe.Incr(ctx, key)

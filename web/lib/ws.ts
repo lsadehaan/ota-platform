@@ -1,5 +1,17 @@
 type WSEventHandler = (event: any) => void
 
+function resolveWSBase(): string {
+  if (process.env.NEXT_PUBLIC_WS_URL) {
+    return process.env.NEXT_PUBLIC_WS_URL.replace(/\/$/, "")
+  }
+  if (typeof window !== "undefined") {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:"
+    const port = process.env.NEXT_PUBLIC_API_PORT || "8080"
+    return `${protocol}//${window.location.hostname}:${port}`
+  }
+  return "ws://ota-api:8080"
+}
+
 class WebSocketManager {
   private ws: WebSocket | null = null
   private url: string
@@ -10,7 +22,7 @@ class WebSocketManager {
   private authFailures = 0
 
   constructor() {
-    const base = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8080'
+    const base = resolveWSBase()
     const token = process.env.NEXT_PUBLIC_API_KEY
     this.url = base + '/ws' + (token ? `?token=${encodeURIComponent(token)}` : '')
   }

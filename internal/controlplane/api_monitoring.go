@@ -11,7 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"ota-platform/internal/db"
-	scyllastore "ota-platform/internal/scylla"
+	"ota-platform/internal/store"
 	"ota-platform/pkg/hexutil"
 )
 
@@ -191,9 +191,9 @@ func (a *API) GetMessage(c *gin.Context) {
 func (a *API) GetErrorSummary(c *gin.Context) {
 	since := time.Now().UTC().Add(-24 * time.Hour)
 	var (
-		statusCounts []scyllastore.ErrorCount
-		dlrCounts    []scyllastore.ErrorCount
-		porCounts    []scyllastore.ErrorCount
+		statusCounts []store.ErrorCount
+		dlrCounts    []store.ErrorCount
+		porCounts    []store.ErrorCount
 		err          error
 		campaignID   *uuid.UUID
 	)
@@ -270,8 +270,8 @@ func (a *API) GetErrorSummary(c *gin.Context) {
 	})
 }
 
-func scyllaMessageFilterFromRequest(c *gin.Context, page, pageSize int) scyllastore.MessageFilter {
-	return scyllastore.MessageFilter{
+func scyllaMessageFilterFromRequest(c *gin.Context, page, pageSize int) store.MessageFilter {
+	return store.MessageFilter{
 		Direction: c.Query("direction"),
 		Status:    c.Query("status"),
 		From:      time.Now().UTC().Add(-24 * time.Hour),

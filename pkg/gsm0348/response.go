@@ -117,6 +117,17 @@ func (sp *SecurityProfile) ParseResponsePacket(raw []byte, cipherKey, signKey []
 	}, nil
 }
 
+// ParseResponsePacketWithProvider parses a response packet when using a CryptoProvider.
+// If PoRCiphered is set, returns an error since HSM-based response decryption is not yet supported.
+// For non-ciphered responses (the common case), this works identically to ParseResponsePacket.
+func (sp *SecurityProfile) ParseResponsePacketWithProvider(raw []byte, cardID string, provider CryptoProvider) (*ResponsePacket, error) {
+	if sp.PoRCiphered {
+		return nil, fmt.Errorf("gsm0348: response decryption with CryptoProvider not yet supported; use ParseResponsePacket with raw keys")
+	}
+	// When PoR is not ciphered, no keys are needed for parsing.
+	return sp.ParseResponsePacket(raw, nil, nil)
+}
+
 // decryptData decrypts data using the specified cipher mode with an all-zero IV.
 // For 3DES-2-key, the 16-byte key is expanded to 24 bytes (K1|K2|K1).
 func decryptData(mode CipherMode, key []byte, data []byte) ([]byte, error) {

@@ -25,6 +25,9 @@ func main() {
 	defer logger.Sync()
 
 	db := bootstrap.MustGormDB(logger)
+	if err := db.Exec(`CREATE EXTENSION IF NOT EXISTS "pg_stat_statements"`).Error; err != nil {
+		logger.Fatal("failed to ensure pg_stat_statements extension", zap.Error(err))
+	}
 	if err := db.AutoMigrate(&appliedMigration{}); err != nil {
 		logger.Fatal("failed to prepare migration table", zap.Error(err))
 	}

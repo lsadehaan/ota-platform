@@ -1,20 +1,91 @@
 package controlplane
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"ota-platform/internal/db"
-	scyllastore "ota-platform/internal/scylla"
+	"ota-platform/internal/store"
 	"ota-platform/pkg/hexutil"
 )
+
+const cardListCacheTTL = 30 * time.Second
+
+type cachedCampaignStats struct {
+	cards []store.CampaignCardView
+	at    time.Time
+}
+
+// getCachedCampaignStats returns stats and optionally card views.
+// Stats always come from counters (cheap — single row read).
+// Card list is loaded only when loadCards is true (expensive DISTINCT ON scan
+// on append-only table — 3-5s for 500k cards).
+func (a *API) getCachedCampaignStats(ctx context.Context, campaignID string, statusFilter string, loadCards bool) (store.CampaignStats, []store.CampaignCardView, error) {
+	if a.query == nil {
+		return store.CampaignStats{}, nil, nil
+	}
+
+	// Stats from counters — always fresh (cheap read).
+	stats, err := a.query.CampaignStats(ctx, uuid.MustParse(campaignID))
+	if err != nil {
+		return store.CampaignStats{}, nil, err
+	}
+
+	if !loadCards {
+		return stats, nil, nil
+	}
+
+	// Card list from cache (expensive scan).
+	a.statsCacheMu.Lock()
+	if a.statsCache == nil {
+		a.statsCache = make(map[string]cachedCampaignStats)
+	}
+	if cached, ok := a.statsCache[campaignID]; ok && time.Since(cached.at) < cardListCacheTTL {
+		a.statsCacheMu.Unlock()
+		cards := cached.cards
+		if statusFilter != "" {
+			filtered := make([]store.CampaignCardView, 0)
+			for _, c := range cards {
+				if c.Status == statusFilter {
+					filtered = append(filtered, c)
+				}
+			}
+			cards = filtered
+		}
+		return stats, cards, nil
+	}
+	a.statsCacheMu.Unlock()
+
+	cards, err := a.query.ListCampaignCards(ctx, uuid.MustParse(campaignID), "")
+	if err != nil {
+		return store.CampaignStats{}, nil, err
+	}
+
+	a.statsCacheMu.Lock()
+	a.statsCache[campaignID] = cachedCampaignStats{cards: cards, at: time.Now()}
+	a.statsCacheMu.Unlock()
+
+	if statusFilter != "" {
+		filtered := make([]store.CampaignCardView, 0)
+		for _, c := range cards {
+			if c.Status == statusFilter {
+				filtered = append(filtered, c)
+			}
+		}
+		cards = filtered
+	}
+	return stats, cards, nil
+}
 
 var allowedCampaignTypes = map[string]struct{}{
 	"cap_load":       {},
@@ -28,6 +99,39 @@ var allowedCampaignTypes = map[string]struct{}{
 	"custom_apdu":    {},
 }
 
+func buildProfileTargetInsertSQL(campaignID uuid.UUID, profileIDs []uuid.UUID) (string, []interface{}) {
+	args := make([]interface{}, 0, len(profileIDs)+1)
+	args = append(args, campaignID)
+	if len(profileIDs) == 1 {
+		args = append(args, profileIDs[0])
+		return `
+			INSERT INTO campaign_targets (campaign_id, card_id, created_at)
+			SELECT ?, id, NOW()
+			FROM cards
+			WHERE profile_id = ? AND status = 'active'
+			ON CONFLICT DO NOTHING
+		`, args
+	}
+
+	var b strings.Builder
+	b.WriteString(`
+		INSERT INTO campaign_targets (campaign_id, card_id, created_at)
+		SELECT ?, id, NOW()
+		FROM cards
+		WHERE profile_id IN (`)
+	for i, profileID := range profileIDs {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("?")
+		args = append(args, profileID)
+	}
+	b.WriteString(`) AND status = 'active'
+		ON CONFLICT DO NOTHING
+	`)
+	return b.String(), args
+}
+
 // CreateCampaignRequest is the request body for POST /api/v1/campaigns.
 type CreateCampaignRequest struct {
 	Name              string           `json:"name" binding:"required"`
@@ -35,6 +139,7 @@ type CreateCampaignRequest struct {
 	Type              string           `json:"type"`
 	CardIDs           []string         `json:"card_ids"`
 	ProfileID         string           `json:"profile_id"`
+	ProfileIDs        []string         `json:"profile_ids"`
 	CardGroupID       string           `json:"card_group_id"`
 	CAPFileID         string           `json:"cap_file_id"`
 	ScriptID          string           `json:"script_id"`
@@ -76,7 +181,7 @@ func (a *API) ListCampaigns(c *gin.Context) {
 		query = query.Where("status = ?", status)
 	}
 	if search := c.Query("search"); search != "" {
-		query = query.Where("name ILIKE ? ESCAPE '\\\\'", "%"+escapeLike(search)+"%")
+		query = query.Where("name ILIKE ? ESCAPE '\\'", "%"+escapeLike(search)+"%")
 	}
 
 	var total int64
@@ -103,7 +208,7 @@ func (a *API) ListCampaigns(c *gin.Context) {
 		campaignIDs[i] = camp.ID
 	}
 
-	statsMap := make(map[uuid.UUID]scyllastore.CampaignStats)
+	statsMap := make(map[uuid.UUID]store.CampaignStats)
 	if a.query != nil && len(campaignIDs) > 0 {
 		var err error
 		statsMap, err = a.query.CampaignStatsBatch(c.Request.Context(), campaignIDs)
@@ -276,8 +381,8 @@ func (a *API) CreateCampaign(c *gin.Context) {
 		campaign.ScheduledAt = &t
 	}
 
-	// Resolve target cards
-	var cardIDs []uuid.UUID
+	// Resolve explicit target cards
+	var explicitCardIDs []uuid.UUID
 
 	// Explicit card IDs
 	for _, idStr := range req.CardIDs {
@@ -286,65 +391,73 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			errorResponse(c, http.StatusBadRequest, "invalid card_id: "+idStr)
 			return
 		}
-		cardIDs = append(cardIDs, id)
+		explicitCardIDs = append(explicitCardIDs, id)
 	}
 
-	// Cards by profile
+	var profileIDs []uuid.UUID
 	if req.ProfileID != "" {
-		profileID, err := uuid.Parse(req.ProfileID)
+		parsed, err := uuid.Parse(req.ProfileID)
 		if err != nil {
 			errorResponse(c, http.StatusBadRequest, "invalid profile_id")
 			return
 		}
-		var profileCards []db.Card
-		if err := a.db.Where("profile_id = ? AND status = 'active'", profileID).Find(&profileCards).Error; err != nil {
-			a.logger.Error("failed to fetch profile cards", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to fetch profile cards")
+		profileIDs = append(profileIDs, parsed)
+	}
+	for _, profileIDStr := range req.ProfileIDs {
+		parsed, err := uuid.Parse(profileIDStr)
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "invalid profile_id in profile_ids")
 			return
 		}
-		for _, card := range profileCards {
-			cardIDs = append(cardIDs, card.ID)
+		profileIDs = append(profileIDs, parsed)
+	}
+	if len(profileIDs) > 1 {
+		seenProfiles := make(map[uuid.UUID]struct{}, len(profileIDs))
+		deduped := make([]uuid.UUID, 0, len(profileIDs))
+		for _, profileID := range profileIDs {
+			if _, ok := seenProfiles[profileID]; ok {
+				continue
+			}
+			seenProfiles[profileID] = struct{}{}
+			deduped = append(deduped, profileID)
 		}
+		profileIDs = deduped
 	}
 
-	// Cards by group
+	var groupID *uuid.UUID
 	if req.CardGroupID != "" {
-		groupID, err := uuid.Parse(req.CardGroupID)
+		parsed, err := uuid.Parse(req.CardGroupID)
 		if err != nil {
 			errorResponse(c, http.StatusBadRequest, "invalid card_group_id")
 			return
 		}
-		var members []db.CardGroupMember
-		if err := a.db.Where("card_group_id = ?", groupID).Find(&members).Error; err != nil {
-			a.logger.Error("failed to fetch group members", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to fetch group members")
-			return
-		}
-		for _, m := range members {
-			cardIDs = append(cardIDs, m.CardID)
-		}
+		groupID = &parsed
 	}
 
-	// Deduplicate card IDs
+	// Deduplicate explicit card IDs
 	seen := make(map[uuid.UUID]bool)
-	var uniqueCardIDs []uuid.UUID
-	for _, id := range cardIDs {
+	uniqueCardIDs := make([]uuid.UUID, 0, len(explicitCardIDs))
+	for _, id := range explicitCardIDs {
 		if !seen[id] {
 			seen[id] = true
 			uniqueCardIDs = append(uniqueCardIDs, id)
 		}
 	}
 
-	if len(uniqueCardIDs) == 0 {
+	if len(uniqueCardIDs) == 0 && len(profileIDs) == 0 && groupID == nil {
 		errorResponse(c, http.StatusBadRequest, "no target cards specified")
 		return
 	}
 
-	// For wizard campaigns, validate all target cards belong to the same profile as the application.
+	// For wizard campaigns, validate the application exists.
 	if req.ApplicationID != "" {
-		appID, _ := uuid.Parse(req.ApplicationID)
+		appID, err := uuid.Parse(req.ApplicationID)
+		if err != nil {
+			errorResponse(c, http.StatusBadRequest, "invalid application_id")
+			return
+		}
 		var app db.Application
-		if err := a.db.Select("profile_id").First(&app, "id = ?", appID).Error; err != nil {
+		if err := a.db.Select("id").First(&app, "id = ?", appID).Error; err != nil {
 			if err == gorm.ErrRecordNotFound {
 				errorResponse(c, http.StatusBadRequest, "application not found")
 				return
@@ -353,18 +466,11 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			errorResponse(c, http.StatusInternalServerError, "failed to validate application profile")
 			return
 		}
-		var mismatchCount int64
-		a.db.Model(&db.Card{}).
-			Where("id IN ? AND profile_id != ?", uniqueCardIDs, app.ProfileID).
-			Count(&mismatchCount)
-		if mismatchCount > 0 {
-			errorResponse(c, http.StatusBadRequest,
-				fmt.Sprintf("%d cards do not belong to the application's profile", mismatchCount))
-			return
-		}
 	}
 
-	// Use a transaction for campaign + commands + cards
+	var targetCount int64
+
+	// Use a transaction for campaign + commands + targets
 	err := a.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(&campaign).Error; err != nil {
 			return err
@@ -392,15 +498,46 @@ func (a *API) CreateCampaign(c *gin.Context) {
 			}
 		}
 
-		// Create campaign targets
-		for _, cardID := range uniqueCardIDs {
-			target := db.CampaignTarget{
-				CampaignID: campaign.ID,
-				CardID:     cardID,
+		if len(uniqueCardIDs) > 0 {
+			targets := make([]db.CampaignTarget, 0, len(uniqueCardIDs))
+			for _, cardID := range uniqueCardIDs {
+				targets = append(targets, db.CampaignTarget{
+					CampaignID: campaign.ID,
+					CardID:     cardID,
+				})
 			}
-			if err := tx.Create(&target).Error; err != nil {
+			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(targets, 2000).Error; err != nil {
 				return err
 			}
+		}
+
+		if len(profileIDs) > 0 {
+			sql, args := buildProfileTargetInsertSQL(campaign.ID, profileIDs)
+			if err := tx.Exec(sql, args...).Error; err != nil {
+				return err
+			}
+		}
+
+		if groupID != nil {
+			if err := tx.Exec(`
+				INSERT INTO campaign_targets (campaign_id, card_id, created_at)
+				SELECT ?, cgm.card_id, NOW()
+				FROM card_group_members cgm
+				JOIN cards c ON c.id = cgm.card_id
+				WHERE cgm.card_group_id = ?
+				ON CONFLICT DO NOTHING
+			`, campaign.ID, *groupID).Error; err != nil {
+				return err
+			}
+		}
+
+		if err := tx.Model(&db.CampaignTarget{}).
+			Where("campaign_id = ?", campaign.ID).
+			Count(&targetCount).Error; err != nil {
+			return err
+		}
+		if targetCount == 0 {
+			return fmt.Errorf("no target cards specified")
 		}
 
 		return nil
@@ -408,6 +545,11 @@ func (a *API) CreateCampaign(c *gin.Context) {
 
 	if err != nil {
 		a.logger.Error("failed to create campaign", zap.Error(err))
+		if strings.Contains(err.Error(), "do not belong to the application's profile") ||
+			strings.Contains(err.Error(), "no target cards specified") {
+			errorResponse(c, http.StatusBadRequest, err.Error())
+			return
+		}
 		errorResponse(c, http.StatusInternalServerError, "failed to create campaign")
 		return
 	}
@@ -415,14 +557,16 @@ func (a *API) CreateCampaign(c *gin.Context) {
 	// Reload with associations
 	a.db.Preload("CampaignCommands").First(&campaign, "id = ?", campaign.ID)
 
-	// Start immediately if requested
+	// Start immediately if requested — use a detached context so that
+	// long-running ScyllaDB initialization isn't canceled if the HTTP
+	// client disconnects (500k-card campaigns can take >5 minutes).
 	if req.StartImmediately {
-		if startErr := a.campaign.StartCampaign(c.Request.Context(), campaign.ID); startErr != nil {
+		if startErr := a.campaign.StartCampaign(context.Background(), campaign.ID); startErr != nil {
 			a.logger.Error("campaign created but failed to start immediately", zap.Error(startErr))
 			// Return the campaign anyway; it was created successfully
 			c.JSON(http.StatusCreated, gin.H{
 				"data":        campaign,
-				"card_count":  len(uniqueCardIDs),
+				"card_count":  targetCount,
 				"start_error": startErr.Error(),
 			})
 			return
@@ -433,7 +577,7 @@ func (a *API) CreateCampaign(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"data":       campaign,
-		"card_count": len(uniqueCardIDs),
+		"card_count": targetCount,
 	})
 }
 
@@ -463,15 +607,15 @@ func (a *API) GetCampaign(c *gin.Context) {
 		return
 	}
 
-	stats := scyllastore.CampaignStats{}
-	if a.query != nil {
-		var err error
-		stats, err = a.query.CampaignStats(c.Request.Context(), uuid.MustParse(id))
-		if err != nil {
-			a.logger.Error("failed to load campaign stats from scylla", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to load campaign stats")
-			return
-		}
+	// Only load the expensive card list when the caller requests pagination or
+	// status filtering. Stats-only polls (e.g. e2e test, dashboard) skip the
+	// DISTINCT ON scan which takes 3-5s on 500k-card campaigns.
+	wantsCards := c.Query("page") != "" || c.Query("status") != ""
+	stats, campaignCards, err := a.getCachedCampaignStats(c.Request.Context(), id, c.Query("status"), wantsCards)
+	if err != nil {
+		a.logger.Error("failed to load campaign stats from scylla", zap.Error(err))
+		errorResponse(c, http.StatusInternalServerError, "failed to load campaign stats")
+		return
 	}
 
 	var progressPct float64
@@ -479,19 +623,8 @@ func (a *API) GetCampaign(c *gin.Context) {
 		progressPct = float64(stats.Completed+stats.Failed+stats.Skipped) / float64(stats.Total) * 100
 	}
 
-	// Paginated cards query from Scylla query tables
 	cardPage, cardPageSize, cardOffset := paginationParams(c)
-	statusFilter := c.Query("status")
-	var campaignCards []scyllastore.CampaignCardView
-	if a.query != nil {
-		var err error
-		campaignCards, err = a.query.ListCampaignCards(c.Request.Context(), uuid.MustParse(id), statusFilter)
-		if err != nil {
-			a.logger.Error("failed to load campaign cards from scylla", zap.Error(err))
-			errorResponse(c, http.StatusInternalServerError, "failed to load campaign cards")
-			return
-		}
-	}
+	_ = cardPage
 	cardTotal := int64(len(campaignCards))
 	cardTotalPages := int(cardTotal) / cardPageSize
 	if int(cardTotal)%cardPageSize != 0 {
@@ -616,6 +749,10 @@ func (a *API) StartCampaign(c *gin.Context) {
 
 	campaignID, _ := uuid.Parse(id)
 	if err := a.campaign.StartCampaign(c.Request.Context(), campaignID); err != nil {
+		if strings.Contains(err.Error(), "shard backlog high") {
+			errorResponse(c, http.StatusConflict, err.Error())
+			return
+		}
 		a.logger.Error("failed to start campaign", zap.Error(err))
 		errorResponse(c, http.StatusBadRequest, err.Error())
 		return

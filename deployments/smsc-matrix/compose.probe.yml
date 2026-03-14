@@ -1,0 +1,31 @@
+# Overlay: Probe SMSC as downstream — controllable test oracle.
+#
+# The probe SMSC captures raw submit_sm bytes and only emits DLR/MO
+# when triggered via its HTTP API (port 8085).
+#
+# Usage:
+#   docker compose -f compose.base.yml -f compose.probe.yml up -d
+#   # Trigger DLR:  curl -X POST http://localhost:8085/dlr -d '{"message_id":"PROBE-1"}'
+#   # Get captures: curl http://localhost:8085/captures
+services:
+  smsc-gateway:
+    environment:
+      # Probe accepts one SMPP connection. Override pool size.
+      GW_POOL_CONNECTIONS: "1"
+
+  downstream-smsc:
+    build:
+      context: ../..
+      dockerfile: cmd/smpp-probe-smsc/Dockerfile
+    ports:
+      - "2775:2775"
+      - "8085:8080"   # HTTP control API
+    environment:
+      PROBE_SMPP_PORT: "2775"
+      PROBE_HTTP_PORT: "8080"
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 2775 || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 5s

@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 
 	"ota-platform/internal/db"
-	scyllastore "ota-platform/internal/scylla"
+	"ota-platform/internal/store"
 )
 
 // GetDashboardKPIs handles GET /api/v1/dashboard/kpis.
@@ -124,11 +124,10 @@ func (a *API) GetRecentActivity(c *gin.Context) {
 }
 
 // GetSMSThroughput handles GET /api/v1/dashboard/sms-throughput.
-// Returns hourly SMS throughput broken down by sent/delivered/failed for the last 24 hours.
+// Returns per-minute average TPS for the last hour (or hourly totals for a specific campaign).
 func (a *API) GetSMSThroughput(c *gin.Context) {
-	since := time.Now().UTC().Add(-24 * time.Hour)
 	var (
-		results []scyllastore.ThroughputPoint
+		results []store.ThroughputPoint
 		err     error
 	)
 	if campaignID := c.Query("campaign_id"); campaignID != "" {
@@ -137,9 +136,10 @@ func (a *API) GetSMSThroughput(c *gin.Context) {
 			errorResponse(c, http.StatusBadRequest, "invalid campaign_id")
 			return
 		}
+		since := time.Now().UTC().Add(-24 * time.Hour)
 		results, err = a.query.CampaignThroughput(c.Request.Context(), id, since)
 	} else {
-		results, err = a.query.Throughput(c.Request.Context(), since)
+		results, err = a.query.MinuteThroughput(c.Request.Context())
 	}
 	if err != nil {
 		a.logger.Error("failed to get SMS throughput", zap.Error(err))
@@ -148,7 +148,7 @@ func (a *API) GetSMSThroughput(c *gin.Context) {
 	}
 
 	if results == nil {
-		results = []scyllastore.ThroughputPoint{}
+		results = []store.ThroughputPoint{}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": results})

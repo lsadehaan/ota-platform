@@ -1,4 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+CREATE EXTENSION IF NOT EXISTS "pg_stat_statements";
 
 CREATE TABLE profiles (
     id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
